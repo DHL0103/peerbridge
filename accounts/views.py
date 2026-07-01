@@ -1,3 +1,11 @@
-from django.shortcuts import render
+from rest_framework import generics
+from rest_framework.permissions import AllowAny
 
-# Create your views here.
+from accounts.serializers import RegisterSerializer
+
+
+class RegisterView(generics.CreateAPIView):
+    """POST /api/auth/register/ 회원가입 API."""
+
+    permission_classes = [AllowAny]
+    serializer_class = RegisterSerializer
