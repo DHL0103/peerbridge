@@ -13,6 +13,7 @@ RUN pip install --no-cache-dir \
     Django==4.2.30 \
     djangorestframework==3.16.1 \
     djangorestframework-simplejwt==5.5.1 \
+    drf-spectacular==0.27.2 \
     mysqlclient==2.2.4 \
     python-dotenv==1.2.1
 
