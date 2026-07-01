@@ -52,10 +52,9 @@ class RegisterSerializer(serializers.ModelSerializer):
 
     def create(self, validated_data):
         validated_data.pop('password_confirm')
-        password = validated_data.pop('password')
 
         try:
-            user = User.objects.create_user(password=password, **validated_data)
+            user = User.objects.create_user(**validated_data)
         except IntegrityError:
             raise serializers.ValidationError({'email': '이미 사용 중인 이메일입니다.'})
         return user
