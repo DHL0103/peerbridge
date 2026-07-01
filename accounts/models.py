@@ -5,6 +5,7 @@ from django.db import models
 class User(AbstractUser):
     """차주(borrower)와 투자자(investor) 역할을 동시에 수행할 수 있는 플랫폼 사용자."""
 
+    email = models.EmailField('email address', unique=True)
     phone_number = models.CharField(max_length=20, blank=True)
     balance = models.DecimalField(max_digits=14, decimal_places=2, default=0)
     created_at = models.DateTimeField(auto_now_add=True)
