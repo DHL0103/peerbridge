@@ -43,6 +43,7 @@ INSTALLED_APPS = [
     'django.contrib.staticfiles',
 
     # Third-party
+    'corsheaders',
     'rest_framework',
     'rest_framework_simplejwt',
     'drf_spectacular',
@@ -53,8 +54,15 @@ INSTALLED_APPS = [
 
 AUTH_USER_MODEL = 'accounts.User'
 
+# ponytail: 로컬 React(Vite) 개발 서버용. 배포 도메인 확정되면 여기 교체.
+CORS_ALLOWED_ORIGINS = [
+    'http://localhost:5173',
+    'http://127.0.0.1:5173',
+]
+
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'corsheaders.middleware.CorsMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
     'django.middleware.csrf.CsrfViewMiddleware',

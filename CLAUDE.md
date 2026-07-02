@@ -14,7 +14,7 @@ P2P 대출 시뮬레이션 플랫폼. 차주(대출 신청자)와 투자자가 �
 ## 개발 환경 설정
 
 ```bash
-pip install django djangorestframework mysqlclient python-dotenv
+pip install django djangorestframework mysqlclient python-dotenv djangorestframework-simplejwt drf-spectacular django-cors-headers
 ```
 
 ## 실행 방법
