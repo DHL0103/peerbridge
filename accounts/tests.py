@@ -16,6 +16,7 @@ class RegisterAPITests(APITestCase):
             'email': 'newuser01@example.com',
             'password': 'S7rongPass!2024',
             'password_confirm': 'S7rongPass!2024',
+            'first_name': '홍길동',
         }
         payload.update(overrides)
         return payload
@@ -25,7 +26,8 @@ class RegisterAPITests(APITestCase):
         response = self.client.post(REGISTER_URL, self.valid_payload(), format='json')
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
-        self.assertTrue(User.objects.filter(username='newuser01').exists())
+        self.assertEqual(response.data['first_name'], '홍길동')
+        self.assertEqual(User.objects.get(username='newuser01').first_name, '홍길동')
 
     # REQ-007 (성공 응답에 비밀번호 관련 필드가 없어야 함)
     def test_register_success_response_does_not_expose_password_fields(self):
@@ -130,6 +132,14 @@ class RegisterAPITests(APITestCase):
     def test_register_missing_password_confirm_returns_400(self):
         payload = self.valid_payload()
         del payload['password_confirm']
+
+        response = self.client.post(REGISTER_URL, payload, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_register_missing_first_name_returns_400(self):
+        payload = self.valid_payload()
+        del payload['first_name']
 
         response = self.client.post(REGISTER_URL, payload, format='json')
 

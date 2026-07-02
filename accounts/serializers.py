@@ -15,6 +15,7 @@ class RegisterSerializer(serializers.ModelSerializer):
     password = serializers.CharField(write_only=True, max_length=128)
     password_confirm = serializers.CharField(write_only=True, max_length=128)
     email = serializers.EmailField(required=True)
+    first_name = serializers.CharField(required=True, max_length=150, label='이름')
 
     class Meta:
         model = User
@@ -24,6 +25,7 @@ class RegisterSerializer(serializers.ModelSerializer):
             'email',
             'password',
             'password_confirm',
+            'first_name',
             'phone_number',
             'balance',
             'created_at',
@@ -42,7 +44,7 @@ class RegisterSerializer(serializers.ModelSerializer):
         if password != password_confirm:
             raise serializers.ValidationError({'password_confirm': '비밀번호가 일치하지 않습니다.'})
 
-        temp_user = User(username=attrs.get('username'), email=attrs.get('email'))
+        temp_user = User(username=attrs.get('username'), email=attrs.get('email'), first_name=attrs.get('first_name'))
         try:
             validate_password(password, user=temp_user)
         except DjangoValidationError as exc:
