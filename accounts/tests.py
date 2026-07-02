@@ -5,6 +5,8 @@ from accounts.models import User
 
 REGISTER_URL = '/api/auth/register/'
 LOGIN_URL = '/api/auth/login/'
+PROFILE_URL = '/api/auth/me/'
+PASSWORD_URL = '/api/auth/password/'
 
 
 class RegisterAPITests(APITestCase):
@@ -243,3 +245,202 @@ class LoginAPITests(APITestCase):
 
         self.assertNotIn(response.status_code, (status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN))
         self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+
+class ProfileAPITests(APITestCase):
+    """GET /api/auth/me/ 에 대한 본인 프로필 조회 API 테스트 (REQ-013~015)."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username='profileuser',
+            email='profileuser@example.com',
+            password='S7rongPass!2024',
+            first_name='홍길동',
+            phone_number='010-1234-5678',
+        )
+
+    # REQ-013
+    def test_get_profile_with_authenticated_user_returns_200_with_expected_fields(self):
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.get(PROFILE_URL)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        for field in ('id', 'username', 'email', 'first_name', 'phone_number', 'balance', 'created_at'):
+            self.assertIn(field, response.data)
+        self.assertEqual(response.data['username'], 'profileuser')
+        self.assertEqual(response.data['email'], 'profileuser@example.com')
+
+    # REQ-014: 비밀번호 관련 필드가 응답에 없어야 함
+    def test_get_profile_response_does_not_expose_password_fields(self):
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.get(PROFILE_URL)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertNotIn('password', response.data)
+
+    # REQ-015: 인증 없이 요청하면 401
+    def test_get_profile_without_authentication_returns_401(self):
+        response = self.client.get(PROFILE_URL)
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+
+class PasswordChangeAPITests(APITestCase):
+    """PUT /api/auth/password/ 에 대한 비밀번호 변경 API 테스트 (REQ-016~024)."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username='pwchangeuser',
+            email='pwchangeuser@example.com',
+            password='OldPass!2024',
+        )
+
+    def valid_payload(self, **overrides):
+        payload = {
+            'current_password': 'OldPass!2024',
+            'new_password': 'NewStr0ngPass!2025',
+            'new_password_confirm': 'NewStr0ngPass!2025',
+        }
+        payload.update(overrides)
+        return payload
+
+    # REQ-016
+    def test_change_password_with_valid_data_returns_200_and_new_password_works(self):
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.put(PASSWORD_URL, self.valid_payload(), format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.check_password('NewStr0ngPass!2025'))
+
+    # REQ-017: current_password가 틀림
+    def test_change_password_with_wrong_current_password_returns_400_and_password_unchanged(self):
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.put(
+            PASSWORD_URL,
+            self.valid_payload(current_password='WrongCurrent!999'),
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.check_password('OldPass!2024'))
+
+    # REQ-018: new_password != new_password_confirm
+    def test_change_password_with_mismatched_confirmation_returns_400_and_password_unchanged(self):
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.put(
+            PASSWORD_URL,
+            self.valid_payload(new_password_confirm='Different!9999'),
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.check_password('OldPass!2024'))
+
+    # REQ-019: new_password == current_password
+    def test_change_password_with_same_as_current_returns_400(self):
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.put(
+            PASSWORD_URL,
+            self.valid_payload(new_password='OldPass!2024', new_password_confirm='OldPass!2024'),
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    # REQ-020: 새 비밀번호가 검증 규칙 위반 (너무 짧음)
+    def test_change_password_with_too_short_new_password_returns_400(self):
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.put(
+            PASSWORD_URL,
+            self.valid_payload(new_password='abc123', new_password_confirm='abc123'),
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    # REQ-020: 새 비밀번호가 숫자로만 이루어짐
+    def test_change_password_with_numeric_only_new_password_returns_400(self):
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.put(
+            PASSWORD_URL,
+            self.valid_payload(new_password='394857203984', new_password_confirm='394857203984'),
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    # REQ-020: 흔한 비밀번호
+    def test_change_password_with_common_new_password_returns_400(self):
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.put(
+            PASSWORD_URL,
+            self.valid_payload(new_password='password123', new_password_confirm='password123'),
+            format='json',
+        )
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    # REQ-021: 필드 누락
+    def test_change_password_missing_current_password_returns_400(self):
+        self.client.force_authenticate(user=self.user)
+        payload = self.valid_payload()
+        del payload['current_password']
+
+        response = self.client.put(PASSWORD_URL, payload, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_change_password_missing_new_password_returns_400(self):
+        self.client.force_authenticate(user=self.user)
+        payload = self.valid_payload()
+        del payload['new_password']
+
+        response = self.client.put(PASSWORD_URL, payload, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    def test_change_password_missing_new_password_confirm_returns_400(self):
+        self.client.force_authenticate(user=self.user)
+        payload = self.valid_payload()
+        del payload['new_password_confirm']
+
+        response = self.client.put(PASSWORD_URL, payload, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    # REQ-022: 인증 없이 요청 → 401
+    def test_change_password_without_authentication_returns_401(self):
+        response = self.client.put(PASSWORD_URL, self.valid_payload(), format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    # REQ-023: 인증 없이 요청 시 비밀번호가 변경되지 않아야 함
+    def test_change_password_without_authentication_does_not_change_password(self):
+        self.client.put(PASSWORD_URL, self.valid_payload(), format='json')
+
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.check_password('OldPass!2024'))
+
+    # REQ-024: PATCH로 current_password를 빼도 부분 검증으로 우회되지 않아야 함
+    def test_change_password_with_patch_and_missing_current_password_returns_400(self):
+        self.client.force_authenticate(user=self.user)
+        payload = self.valid_payload()
+        del payload['current_password']
+
+        response = self.client.patch(PASSWORD_URL, payload, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.user.refresh_from_db()
+        self.assertTrue(self.user.check_password('OldPass!2024'))
