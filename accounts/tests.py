@@ -2,13 +2,18 @@ from rest_framework import status
 from rest_framework.test import APITestCase
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from accounts.models import User
+from accounts.models import BankAccount, User
 
 REGISTER_URL = '/api/auth/register/'
 LOGIN_URL = '/api/auth/login/'
 PROFILE_URL = '/api/auth/me/'
 PASSWORD_URL = '/api/auth/password/'
 LOGOUT_URL = '/api/auth/logout/'
+BANK_ACCOUNTS_URL = '/api/auth/bank-accounts/'
+
+
+def set_primary_url(pk):
+    return f'/api/auth/bank-accounts/{pk}/set-primary/'
 
 
 class RegisterAPITests(APITestCase):
@@ -490,3 +495,90 @@ class LogoutAPITests(APITestCase):
         response = self.client.post(LOGOUT_URL, {'refresh': self.refresh}, format='json')
 
         self.assertNotIn(response.status_code, (status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN))
+
+
+class BankAccountAPITests(APITestCase):
+    """GET/POST /api/auth/bank-accounts/, POST .../set-primary/ 에 대한 계좌 관리 API 테스트 (REQ-001~004)."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username='bankuser', email='bankuser@example.com', password='S7rongPass!2024',
+        )
+        self.other_user = User.objects.create_user(
+            username='otheruser', email='otheruser@example.com', password='S7rongPass!2024',
+        )
+
+    def valid_payload(self, **overrides):
+        payload = {'bank_name': 'KB국민', 'account_number': '123-456-789', 'account_holder': '홍길동'}
+        payload.update(overrides)
+        return payload
+
+    # REQ-001
+    def test_list_returns_only_own_accounts(self):
+        BankAccount.objects.create(user=self.user, bank_name='KB국민', account_number='111', account_holder='홍길동')
+        BankAccount.objects.create(user=self.other_user, bank_name='신한', account_number='222', account_holder='김철수')
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.get(BANK_ACCOUNTS_URL)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        results = response.data['results']
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]['bank_name'], 'KB국민')
+
+    # REQ-010
+    def test_list_without_authentication_returns_401(self):
+        response = self.client.get(BANK_ACCOUNTS_URL)
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    # REQ-002: 첫 계좌는 자동으로 기본계좌가 되어야 함
+    def test_create_first_account_is_automatically_primary(self):
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.post(BANK_ACCOUNTS_URL, self.valid_payload(), format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertTrue(response.data['is_primary'])
+
+    # REQ-002: 두 번째 계좌는 기본계좌로 지정하지 않는 한 기본계좌가 아니어야 함
+    def test_create_second_account_is_not_primary_by_default(self):
+        self.client.force_authenticate(user=self.user)
+        self.client.post(BANK_ACCOUNTS_URL, self.valid_payload(), format='json')
+
+        response = self.client.post(BANK_ACCOUNTS_URL, self.valid_payload(account_number='999'), format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertFalse(response.data['is_primary'])
+
+    def test_create_missing_required_field_returns_400(self):
+        self.client.force_authenticate(user=self.user)
+        payload = self.valid_payload()
+        del payload['bank_name']
+
+        response = self.client.post(BANK_ACCOUNTS_URL, payload, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    # REQ-003
+    def test_set_primary_switches_primary_atomically(self):
+        self.client.force_authenticate(user=self.user)
+        first = BankAccount.objects.create(user=self.user, bank_name='KB국민', account_number='111', account_holder='홍길동', is_primary=True)
+        second = BankAccount.objects.create(user=self.user, bank_name='신한', account_number='222', account_holder='홍길동', is_primary=False)
+
+        response = self.client.post(set_primary_url(second.id))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        first.refresh_from_db()
+        second.refresh_from_db()
+        self.assertFalse(first.is_primary)
+        self.assertTrue(second.is_primary)
+
+    # REQ-004
+    def test_set_primary_on_other_users_account_returns_404(self):
+        self.client.force_authenticate(user=self.user)
+        other_account = BankAccount.objects.create(user=self.other_user, bank_name='신한', account_number='222', account_holder='김철수')
+
+        response = self.client.post(set_primary_url(other_account.id))
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
