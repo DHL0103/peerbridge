@@ -1,5 +1,6 @@
 from rest_framework import status
 from rest_framework.test import APITestCase
+from rest_framework_simplejwt.tokens import RefreshToken
 
 from accounts.models import User
 
@@ -7,6 +8,7 @@ REGISTER_URL = '/api/auth/register/'
 LOGIN_URL = '/api/auth/login/'
 PROFILE_URL = '/api/auth/me/'
 PASSWORD_URL = '/api/auth/password/'
+LOGOUT_URL = '/api/auth/logout/'
 
 
 class RegisterAPITests(APITestCase):
@@ -444,3 +446,47 @@ class PasswordChangeAPITests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.user.refresh_from_db()
         self.assertTrue(self.user.check_password('OldPass!2024'))
+
+
+class LogoutAPITests(APITestCase):
+    """POST /api/auth/logout/ 에 대한 로그아웃(refresh 토큰 블랙리스트) API 테스트 (REQ-025~028)."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username='logoutuser',
+            email='logoutuser@example.com',
+            password='S7rongPass!2024',
+        )
+        self.refresh = str(RefreshToken.for_user(self.user))
+
+    # REQ-025
+    def test_logout_with_valid_refresh_returns_200(self):
+        response = self.client.post(LOGOUT_URL, {'refresh': self.refresh}, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+    # REQ-025: 블랙리스트 등록으로 재발급(refresh)에 더 이상 쓸 수 없어야 함
+    def test_logout_reused_refresh_token_returns_401(self):
+        self.client.post(LOGOUT_URL, {'refresh': self.refresh}, format='json')
+
+        response = self.client.post(LOGOUT_URL, {'refresh': self.refresh}, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    # REQ-026: refresh 필드 누락
+    def test_logout_missing_refresh_returns_400(self):
+        response = self.client.post(LOGOUT_URL, {}, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+    # REQ-027: 잘못된(위조/손상) refresh 토큰
+    def test_logout_with_malformed_refresh_returns_401(self):
+        response = self.client.post(LOGOUT_URL, {'refresh': 'not-a-real-token'}, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    # REQ-028: 인증 헤더(access 토큰) 없이도 refresh 토큰만으로 접근 가능해야 함
+    def test_logout_is_accessible_without_authentication_header(self):
+        response = self.client.post(LOGOUT_URL, {'refresh': self.refresh}, format='json')
+
+        self.assertNotIn(response.status_code, (status.HTTP_401_UNAUTHORIZED, status.HTTP_403_FORBIDDEN))
