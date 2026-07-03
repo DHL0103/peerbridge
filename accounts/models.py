@@ -23,5 +23,8 @@ class BankAccount(models.Model):
     is_primary = models.BooleanField(default=False)
     created_at = models.DateTimeField(auto_now_add=True)
 
+    class Meta:
+        ordering = ['-created_at']
+
     def __str__(self):
         return f'{self.bank_name} {self.account_number}'
