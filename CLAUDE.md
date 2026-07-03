@@ -14,7 +14,7 @@ P2P 대출 시뮬레이션 플랫폼. 차주(대출 신청자)와 투자자가 �
 ## 개발 환경 설정
 
 ```bash
-pip install django djangorestframework mysqlclient python-dotenv
+pip install django djangorestframework mysqlclient python-dotenv djangorestframework-simplejwt drf-spectacular django-cors-headers
 ```
 
 ## 실행 방법
@@ -84,6 +84,19 @@ USER ──< LOAN_APPLICATION ──○ LOAN ──< INVESTMENT >── USER
 USER ──< LEDGER
 USER ──< NOTIFICATION
 ```
+
+## App 분리 계획
+
+엔티티는 도메인 경계에 따라 아래 app으로 분리한다. 독립적인 라이프사이클/서비스 로직이 없는 하위 리소스(BANK_ACCOUNT 등)는 소유 엔티티와 같은 app에 둔다.
+
+| app | 엔티티 | 핵심 역할 |
+|-----|--------|-----------|
+| accounts | User, BankAccount | 회원, 인증, 예치금 잔액, 계좌 정보 |
+| loans | LoanApplication, Loan | 대출 신청서(심사 전) / 승인된 대출 상품(모집·상환 대상) |
+| investments | Investment | 투자자의 투자 행위 |
+| repayments | RepaymentSchedule, Repayment, Distribution | 회차별 상환 계획 / 실제 상환 / 투자자별 분배 |
+| ledger | Ledger | 모든 자금 이동 기록(원장) |
+| notifications | Notification | 알림 |
 
 ## API 구조 (예정)
 

@@ -30,6 +30,10 @@ local_settings.py
 db.sqlite3
 media/
 
+# Test coverage
+.coverage
+htmlcov/
+
 # IDE
 .idea/
 .vscode/
