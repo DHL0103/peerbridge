@@ -18,8 +18,16 @@ class LoanApplicationListCreateView(generics.ListCreateAPIView):
         return LoanApplication.objects.filter(user=self.request.user)
 
 
+class LoanApplicationPendingListView(generics.ListAPIView):
+    """GET /api/loans/applications/pending/ 관리자용 심사 대기 목록 API."""
+
+    permission_classes = [IsAdminUser]
+    serializer_class = LoanApplicationSerializer
+    queryset = LoanApplication.objects.filter(status=LoanApplication.Status.PENDING)
+
+
 class LoanApplicationApproveView(APIView):
-    """POST /api/loans/applications/{id}/approve/ 관리자 승인 API. 승인 시 Loan을 원자적으로 생성한다."""
+    """POST /api/loans/applications/{id}/approve/ 관리자 승인 API. interest_rate/investor_rate를 함께 책정하고 Loan을 원자적으로 생성한다."""
 
     permission_classes = [IsAdminUser]
 
@@ -29,14 +37,14 @@ class LoanApplicationApproveView(APIView):
             if application.status != LoanApplication.Status.PENDING:
                 return Response({'status': ['이미 처리된 신청서입니다.']}, status=status.HTTP_400_BAD_REQUEST)
 
-            serializer = LoanApplicationApproveSerializer(data=request.data, context={'application': application})
+            serializer = LoanApplicationApproveSerializer(data=request.data)
             serializer.is_valid(raise_exception=True)
 
             application.status = LoanApplication.Status.APPROVED
             application.save(update_fields=['status'])
             loan = Loan.objects.create(
                 application=application,
-                interest_rate=application.interest_rate,
+                interest_rate=serializer.validated_data['interest_rate'],
                 investor_rate=serializer.validated_data['investor_rate'],
                 target_amount=application.amount,
                 term_months=application.term_months,

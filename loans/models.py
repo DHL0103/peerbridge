@@ -14,7 +14,6 @@ class LoanApplication(models.Model):
     amount = models.DecimalField(max_digits=14, decimal_places=2)
     purpose = models.CharField(max_length=200)
     term_months = models.PositiveSmallIntegerField()
-    interest_rate = models.DecimalField(max_digits=5, decimal_places=2)
     status = models.CharField(max_length=10, choices=Status.choices, default=Status.PENDING)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
