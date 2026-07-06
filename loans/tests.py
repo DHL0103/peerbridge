@@ -7,6 +7,7 @@ from accounts.models import User
 from loans.models import Loan, LoanApplication
 
 APPLICATIONS_URL = '/api/loans/applications/'
+PENDING_URL = '/api/loans/applications/pending/'
 LOANS_URL = '/api/loans/'
 
 
@@ -33,7 +34,7 @@ class LoanApplicationCreateAPITests(APITestCase):
         self.client.force_authenticate(user=self.user)
 
         response = self.client.post(APPLICATIONS_URL, {
-            'amount': '1000000.00', 'purpose': '사업자금', 'term_months': 12, 'interest_rate': '15.00',
+            'amount': '1000000.00', 'purpose': '사업자금', 'term_months': 12,
         }, format='json')
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
@@ -47,36 +48,16 @@ class LoanApplicationCreateAPITests(APITestCase):
         self.client.force_authenticate(user=self.user)
 
         response = self.client.post(APPLICATIONS_URL, {
-            'amount': '0', 'purpose': '사업자금', 'term_months': 12, 'interest_rate': '15.00',
+            'amount': '0', 'purpose': '사업자금', 'term_months': 12,
         }, format='json')
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertEqual(LoanApplication.objects.count(), 0)
 
-    # REQ-002
-    def test_create_with_interest_rate_over_20_returns_400(self):
-        self.client.force_authenticate(user=self.user)
-
-        response = self.client.post(APPLICATIONS_URL, {
-            'amount': '1000000.00', 'purpose': '사업자금', 'term_months': 12, 'interest_rate': '20.01',
-        }, format='json')
-
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-
-    # REQ-002
-    def test_create_with_zero_interest_rate_returns_400(self):
-        self.client.force_authenticate(user=self.user)
-
-        response = self.client.post(APPLICATIONS_URL, {
-            'amount': '1000000.00', 'purpose': '사업자금', 'term_months': 12, 'interest_rate': '0',
-        }, format='json')
-
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-
     # REQ-003
     def test_create_without_authentication_returns_401(self):
         response = self.client.post(APPLICATIONS_URL, {
-            'amount': '1000000.00', 'purpose': '사업자금', 'term_months': 12, 'interest_rate': '15.00',
+            'amount': '1000000.00', 'purpose': '사업자금', 'term_months': 12,
         }, format='json')
 
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
@@ -91,9 +72,9 @@ class LoanApplicationListAPITests(APITestCase):
 
     # REQ-004
     def test_list_returns_only_own_applications_ordered_by_latest_first(self):
-        older = LoanApplication.objects.create(user=self.user, amount=Decimal('500000'), purpose='A', term_months=6, interest_rate=Decimal('10.00'))
-        newer = LoanApplication.objects.create(user=self.user, amount=Decimal('700000'), purpose='B', term_months=6, interest_rate=Decimal('10.00'))
-        LoanApplication.objects.create(user=self.other_user, amount=Decimal('900000'), purpose='C', term_months=6, interest_rate=Decimal('10.00'))
+        older = LoanApplication.objects.create(user=self.user, amount=Decimal('500000'), purpose='A', term_months=6)
+        newer = LoanApplication.objects.create(user=self.user, amount=Decimal('700000'), purpose='B', term_months=6)
+        LoanApplication.objects.create(user=self.other_user, amount=Decimal('900000'), purpose='C', term_months=6)
         self.client.force_authenticate(user=self.user)
 
         response = self.client.get(APPLICATIONS_URL)
@@ -111,14 +92,49 @@ class LoanApplicationListAPITests(APITestCase):
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
 
+class LoanApplicationPendingListAPITests(APITestCase):
+    """GET /api/loans/applications/pending/ 관리자용 심사 대기 목록 API 테스트 (REQ-011, REQ-007, REQ-003)."""
+
+    def setUp(self):
+        self.admin = User.objects.create_user(username='admin3', email='admin3@example.com', password='S7rongPass!2024', is_staff=True)
+        self.borrower = User.objects.create_user(username='borrower7', email='borrower7@example.com', password='S7rongPass!2024')
+
+    # REQ-011
+    def test_pending_list_returns_only_pending_applications_across_all_users(self):
+        pending = LoanApplication.objects.create(user=self.borrower, amount=Decimal('500000'), purpose='A', term_months=6)
+        LoanApplication.objects.create(user=self.borrower, amount=Decimal('700000'), purpose='B', term_months=6, status=LoanApplication.Status.APPROVED)
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.get(PENDING_URL)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        results = response.data['results']
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]['id'], pending.id)
+
+    # REQ-007
+    def test_pending_list_by_non_admin_returns_403(self):
+        self.client.force_authenticate(user=self.borrower)
+
+        response = self.client.get(PENDING_URL)
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    # REQ-003
+    def test_pending_list_without_authentication_returns_401(self):
+        response = self.client.get(PENDING_URL)
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+
 class LoanApplicationApproveAPITests(APITestCase):
-    """POST /api/loans/applications/{id}/approve/ 승인 API 테스트 (REQ-005, REQ-006, REQ-007, REQ-008)."""
+    """POST /api/loans/applications/{id}/approve/ 승인 API 테스트 (REQ-005, REQ-006, REQ-007, REQ-008, REQ-012)."""
 
     def setUp(self):
         self.admin = User.objects.create_user(username='admin', email='admin@example.com', password='S7rongPass!2024', is_staff=True)
         self.borrower = User.objects.create_user(username='borrower3', email='borrower3@example.com', password='S7rongPass!2024')
         self.application = LoanApplication.objects.create(
-            user=self.borrower, amount=Decimal('1000000'), purpose='사업자금', term_months=12, interest_rate=Decimal('15.00'),
+            user=self.borrower, amount=Decimal('1000000'), purpose='사업자금', term_months=12,
         )
 
     # REQ-005
@@ -126,7 +142,7 @@ class LoanApplicationApproveAPITests(APITestCase):
         self.client.force_authenticate(user=self.admin)
 
         response = self.client.post(approve_url(self.application.id), {
-            'investor_rate': '12.00', 'funding_deadline': '2026-08-01',
+            'interest_rate': '15.00', 'investor_rate': '12.00', 'funding_deadline': '2026-08-01',
         }, format='json')
 
         self.assertEqual(response.status_code, status.HTTP_201_CREATED)
@@ -144,7 +160,18 @@ class LoanApplicationApproveAPITests(APITestCase):
         self.client.force_authenticate(user=self.admin)
 
         response = self.client.post(approve_url(self.application.id), {
-            'investor_rate': '15.00', 'funding_deadline': '2026-08-01',
+            'interest_rate': '15.00', 'investor_rate': '15.00', 'funding_deadline': '2026-08-01',
+        }, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertEqual(Loan.objects.count(), 0)
+
+    # REQ-012
+    def test_approve_with_interest_rate_over_20_returns_400(self):
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.post(approve_url(self.application.id), {
+            'interest_rate': '20.01', 'investor_rate': '12.00', 'funding_deadline': '2026-08-01',
         }, format='json')
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
@@ -155,7 +182,7 @@ class LoanApplicationApproveAPITests(APITestCase):
         self.client.force_authenticate(user=self.borrower)
 
         response = self.client.post(approve_url(self.application.id), {
-            'investor_rate': '12.00', 'funding_deadline': '2026-08-01',
+            'interest_rate': '15.00', 'investor_rate': '12.00', 'funding_deadline': '2026-08-01',
         }, format='json')
 
         self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
@@ -167,7 +194,7 @@ class LoanApplicationApproveAPITests(APITestCase):
         self.client.force_authenticate(user=self.admin)
 
         response = self.client.post(approve_url(self.application.id), {
-            'investor_rate': '12.00', 'funding_deadline': '2026-08-01',
+            'interest_rate': '15.00', 'investor_rate': '12.00', 'funding_deadline': '2026-08-01',
         }, format='json')
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
@@ -180,7 +207,7 @@ class LoanApplicationRejectAPITests(APITestCase):
         self.admin = User.objects.create_user(username='admin2', email='admin2@example.com', password='S7rongPass!2024', is_staff=True)
         self.borrower = User.objects.create_user(username='borrower4', email='borrower4@example.com', password='S7rongPass!2024')
         self.application = LoanApplication.objects.create(
-            user=self.borrower, amount=Decimal('1000000'), purpose='사업자금', term_months=12, interest_rate=Decimal('15.00'),
+            user=self.borrower, amount=Decimal('1000000'), purpose='사업자금', term_months=12,
         )
 
     # REQ-009
@@ -222,7 +249,7 @@ class LoanListAPITests(APITestCase):
 
     def _create_loan(self, amount):
         application = LoanApplication.objects.create(
-            user=self.borrower, amount=amount, purpose='P', term_months=12, interest_rate=Decimal('15.00'), status=LoanApplication.Status.APPROVED,
+            user=self.borrower, amount=amount, purpose='P', term_months=12, status=LoanApplication.Status.APPROVED,
         )
         return Loan.objects.create(
             application=application, interest_rate=Decimal('15.00'), investor_rate=Decimal('12.00'),
@@ -257,7 +284,7 @@ class LoanDetailAPITests(APITestCase):
         self.user = User.objects.create_user(username='viewer2', email='viewer2@example.com', password='S7rongPass!2024')
         self.borrower = User.objects.create_user(username='borrower6', email='borrower6@example.com', password='S7rongPass!2024')
         application = LoanApplication.objects.create(
-            user=self.borrower, amount=Decimal('1000000'), purpose='P', term_months=12, interest_rate=Decimal('15.00'), status=LoanApplication.Status.APPROVED,
+            user=self.borrower, amount=Decimal('1000000'), purpose='P', term_months=12, status=LoanApplication.Status.APPROVED,
         )
         self.loan = Loan.objects.create(
             application=application, interest_rate=Decimal('15.00'), investor_rate=Decimal('12.00'),
