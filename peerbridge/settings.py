@@ -53,6 +53,7 @@ INSTALLED_APPS = [
     'accounts',
     'ledger',
     'loans',
+    'investments',
 ]
 
 AUTH_USER_MODEL = 'accounts.User'
