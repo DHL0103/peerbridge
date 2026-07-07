@@ -1,7 +1,7 @@
 from django.db import transaction
 from django.shortcuts import get_object_or_404
 from rest_framework import generics, status
-from rest_framework.permissions import IsAdminUser
+from rest_framework.permissions import AllowAny, IsAdminUser
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
@@ -72,14 +72,22 @@ class LoanApplicationRejectView(APIView):
 
 
 class LoanListView(generics.ListAPIView):
-    """GET /api/loans/ 대출 상품 목록 조회 API."""
+    """GET /api/loans/ 대출 상품 목록 조회 API. ?status=FUNDRAISING 등으로 필터링 가능. 메인페이지 노출용이라 비로그인도 허용."""
 
-    queryset = Loan.objects.all()
+    permission_classes = [AllowAny]
     serializer_class = LoanSerializer
+
+    def get_queryset(self):
+        queryset = Loan.objects.all()
+        status_param = self.request.query_params.get('status')
+        if status_param:
+            queryset = queryset.filter(status=status_param)
+        return queryset
 
 
 class LoanDetailView(generics.RetrieveAPIView):
-    """GET /api/loans/{id}/ 대출 상품 상세 조회 API."""
+    """GET /api/loans/{id}/ 대출 상품 상세 조회 API. 목록과 동일하게 비로그인도 허용."""
 
+    permission_classes = [AllowAny]
     queryset = Loan.objects.all()
     serializer_class = LoanSerializer
