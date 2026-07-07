@@ -1,8 +1,12 @@
-from rest_framework import generics
+from django.db import transaction
+from django.shortcuts import get_object_or_404
+from rest_framework import generics, status
 from rest_framework.permissions import AllowAny
 from rest_framework.response import Response
+from rest_framework.views import APIView
 
-from accounts.serializers import PasswordChangeSerializer, ProfileSerializer, RegisterSerializer
+from accounts.models import BankAccount
+from accounts.serializers import BankAccountSerializer, PasswordChangeSerializer, ProfileSerializer, RegisterSerializer
 
 
 class RegisterView(generics.CreateAPIView):
@@ -32,3 +36,26 @@ class PasswordChangeView(generics.UpdateAPIView):
         serializer.is_valid(raise_exception=True)
         serializer.save()
         return Response({'detail': '비밀번호가 변경되었습니다.'})
+
+
+class BankAccountListCreateView(generics.ListCreateAPIView):
+    """GET/POST /api/auth/bank-accounts/ 계좌 목록 조회/등록 API."""
+
+    serializer_class = BankAccountSerializer
+
+    def get_queryset(self):
+        return BankAccount.objects.filter(user=self.request.user)
+
+
+class BankAccountSetPrimaryView(APIView):
+    """POST /api/auth/bank-accounts/{id}/set-primary/ 기본계좌 설정 API."""
+
+    def post(self, request, pk):
+        account = get_object_or_404(BankAccount, pk=pk, user=request.user)
+
+        with transaction.atomic():
+            BankAccount.objects.filter(user=request.user).exclude(pk=account.pk).update(is_primary=False)
+            account.is_primary = True
+            account.save(update_fields=['is_primary'])
+
+        return Response(BankAccountSerializer(account).data, status=status.HTTP_200_OK)
