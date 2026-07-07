@@ -3,7 +3,7 @@ from django.core.exceptions import ValidationError as DjangoValidationError
 from django.db import IntegrityError
 from rest_framework import serializers
 
-from accounts.models import User
+from accounts.models import BankAccount, User
 
 
 class RegisterSerializer(serializers.ModelSerializer):
@@ -67,8 +67,22 @@ class ProfileSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = User
-        fields = ['id', 'username', 'email', 'first_name', 'phone_number', 'balance', 'created_at']
+        fields = ['id', 'username', 'email', 'first_name', 'phone_number', 'balance', 'is_staff', 'created_at']
         read_only_fields = fields
+
+
+class BankAccountSerializer(serializers.ModelSerializer):
+    """계좌 목록 조회/등록 시리얼라이저. 사용자의 첫 계좌는 자동으로 기본계좌가 된다."""
+
+    class Meta:
+        model = BankAccount
+        fields = ['id', 'bank_name', 'account_number', 'account_holder', 'is_primary', 'created_at']
+        read_only_fields = ['id', 'is_primary', 'created_at']
+
+    def create(self, validated_data):
+        user = self.context['request'].user
+        validated_data['is_primary'] = not BankAccount.objects.filter(user=user).exists()
+        return BankAccount.objects.create(user=user, **validated_data)
 
 
 class PasswordChangeSerializer(serializers.Serializer):

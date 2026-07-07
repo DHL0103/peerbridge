@@ -44,8 +44,8 @@ DB_PORT=3306
 - 모든 자금 이동은 LEDGER에 기록됨
 
 ### 대출 신청 → 대출 상품 흐름
-1. 차주가 `LOAN_APPLICATION` 생성 (status=PENDING)
-2. 관리자 심사 → APPROVED 시 `LOAN` 생성 (status=FUNDRAISING)
+1. 차주가 `LOAN_APPLICATION` 생성 (status=PENDING). 신청 시점엔 금액/목적/기간만 받고 금리는 받지 않음
+2. 관리자 심사 → APPROVED 시 `LOAN` 생성 (status=FUNDRAISING). 이 시점에 관리자가 `interest_rate`/`investor_rate`를 함께 책정해 확정
 3. 투자자들이 `INVESTMENT` 생성 → `funded_amount` 누적
 4. 목표 달성 or 마감일 도래 → LOAN status=ACTIVE, 대출 실행
 5. `REPAYMENT_SCHEDULE` 자동 생성 (균등분할 상환)
@@ -60,6 +60,7 @@ DB_PORT=3306
 - `interest_rate`: 차주 연이율 (법정 최고 20% 이내)
 - `investor_rate`: 투자자 수익률 (`interest_rate` 미만)
 - 차액(스프레드)이 플랫폼 수수료
+- 금리는 차주 자기신고가 아니라 관리자가 승인 시점에 신용도를 보고 책정 (`LOAN_APPLICATION`에는 금리 필드 자체가 없음)
 
 ### 연체 처리
 - LOAN status: `ACTIVE → OVERDUE_1 → OVERDUE_2 → DEFAULT → WRITTEN_OFF`
@@ -98,17 +99,29 @@ USER ──< NOTIFICATION
 | ledger | Ledger | 모든 자금 이동 기록(원장) |
 | notifications | Notification | 알림 |
 
-## API 구조 (예정)
+## API 구조
+
+### loans (구현 완료)
+
+| Method | Endpoint | 설명 | 인증 |
+|--------|----------|------|------|
+| GET/POST | /api/loans/applications/ | 내 대출 신청 목록 조회 / 등록 | 로그인 필요 |
+| GET | /api/loans/applications/pending/ | 관리자용 심사 대기 목록 | 관리자만 |
+| POST | /api/loans/applications/{id}/approve/ | 승인 (`interest_rate`/`investor_rate`/`funding_deadline` 확정, Loan 생성) | 관리자만 |
+| POST | /api/loans/applications/{id}/reject/ | 거절 | 관리자만 |
+| GET | /api/loans/ | 대출 상품 목록 (`?status=FUNDRAISING` 등 필터) | 비로그인 허용 (메인페이지 노출용) |
+| GET | /api/loans/{id}/ | 대출 상품 상세 | 비로그인 허용 |
+
+### 그 외 (예정)
 
 | Method | Endpoint | 설명 |
 |--------|----------|------|
-| POST | /api/auth/register/ | 회원가입 |
-| POST | /api/auth/login/ | 로그인 |
-| GET/POST | /api/loans/ | 대출 상품 목록 / 모집 현황 |
-| POST | /api/loans/{id}/invest/ | 투자 실행 |
-| POST | /api/loans/{id}/repay/ | 상환 납부 |
-| GET | /api/ledger/ | 내 거래 내역 |
-| GET | /api/notifications/ | 알림 목록 |
+| POST | /api/auth/register/ | 회원가입 (구현 완료) |
+| POST | /api/auth/login/ | 로그인 (구현 완료) |
+| GET | /api/ledger/ | 내 거래 내역 (구현 완료) |
+| POST | /api/loans/{id}/invest/ | 투자 실행 (investments 앱 예정) |
+| POST | /api/loans/{id}/repay/ | 상환 납부 (repayments 앱 예정) |
+| GET | /api/notifications/ | 알림 목록 (예정) |
 
 ## 커밋 컨벤션
 

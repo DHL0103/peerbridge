@@ -51,6 +51,8 @@ INSTALLED_APPS = [
 
     # Local
     'accounts',
+    'ledger',
+    'loans',
 ]
 
 AUTH_USER_MODEL = 'accounts.User'
