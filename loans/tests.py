@@ -270,11 +270,28 @@ class LoanListAPITests(APITestCase):
         self.assertEqual(results[0]['id'], newer.id)
         self.assertEqual(results[1]['id'], older.id)
 
-    # REQ-003
-    def test_list_without_authentication_returns_401(self):
+    # REQ-013
+    def test_list_without_authentication_returns_200(self):
+        self._create_loan(Decimal('500000'))
+
         response = self.client.get(LOANS_URL)
 
-        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(len(response.data['results']), 1)
+
+    # REQ-013
+    def test_list_filters_by_status(self):
+        fundraising = self._create_loan(Decimal('500000'))
+        active = self._create_loan(Decimal('700000'))
+        active.status = Loan.Status.ACTIVE
+        active.save()
+
+        response = self.client.get(f'{LOANS_URL}?status=FUNDRAISING')
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        results = response.data['results']
+        self.assertEqual(len(results), 1)
+        self.assertEqual(results[0]['id'], fundraising.id)
 
 
 class LoanDetailAPITests(APITestCase):
@@ -298,6 +315,7 @@ class LoanDetailAPITests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
         self.assertEqual(response.data['id'], self.loan.id)
+        self.assertEqual(response.data['purpose'], 'P')
 
     def test_detail_not_found_returns_404(self):
         self.client.force_authenticate(user=self.user)
@@ -305,3 +323,9 @@ class LoanDetailAPITests(APITestCase):
         response = self.client.get(loan_detail_url(999999))
 
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    # REQ-013
+    def test_detail_without_authentication_returns_200(self):
+        response = self.client.get(loan_detail_url(self.loan.id))
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)

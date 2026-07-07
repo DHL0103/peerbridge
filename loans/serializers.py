@@ -36,9 +36,11 @@ class LoanApplicationApproveSerializer(serializers.Serializer):
 
 
 class LoanSerializer(serializers.ModelSerializer):
+    purpose = serializers.CharField(source='application.purpose', read_only=True)
+
     class Meta:
         model = Loan
         fields = [
-            'id', 'interest_rate', 'investor_rate', 'target_amount', 'funded_amount',
+            'id', 'purpose', 'interest_rate', 'investor_rate', 'target_amount', 'funded_amount',
             'term_months', 'funding_deadline', 'status', 'created_at',
         ]
