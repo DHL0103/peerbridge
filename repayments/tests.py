@@ -331,3 +331,77 @@ class RepaymentAPITests(APITestCase):
         response = self.client.post(_repay_url(loan.id), {}, format='json')
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+
+NEXT_REPAYMENT_URL = '/api/loans/mine/next-repayment/'
+
+
+class NextRepaymentAPITests(APITestCase):
+    """GET /api/loans/mine/next-repayment/ 다음 상환 예정 회차 조회 테스트."""
+
+    def setUp(self):
+        self.borrower = User.objects.create_user(username='borrower', email='borrower@example.com', password='S7rongPass!2024')
+        self.borrower.balance = Decimal('1000000.00')
+        self.borrower.save()
+        self.other_borrower = User.objects.create_user(username='other', email='other@example.com', password='S7rongPass!2024')
+        self.investor = User.objects.create_user(username='investor', email='investor@example.com', password='S7rongPass!2024')
+        self.investor.balance = Decimal('1000000.00')
+        self.investor.save()
+
+    def _create_active_loan(self, user, target_amount=Decimal('300000.00'), term_months=12):
+        application = LoanApplication.objects.create(
+            user=user, amount=target_amount, purpose='사업자금', term_months=term_months,
+            status=LoanApplication.Status.APPROVED,
+        )
+        loan = Loan.objects.create(
+            application=application, interest_rate=Decimal('12.00'), investor_rate=Decimal('10.00'),
+            target_amount=target_amount, funded_amount=Decimal('0'), term_months=term_months,
+            funding_deadline='2026-12-01', status=Loan.Status.FUNDRAISING,
+        )
+        create_investment(loan_id=loan.id, investor=self.investor, amount=target_amount, idempotency_key=f'fund-{loan.id}')
+        loan.refresh_from_db()
+        return loan
+
+    def test_returns_next_pending_schedule_for_borrower(self):
+        loan = self._create_active_loan(self.borrower)
+        self.client.force_authenticate(user=self.borrower)
+
+        response = self.client.get(NEXT_REPAYMENT_URL)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['loan_id'], loan.id)
+        self.assertEqual(response.data['purpose'], '사업자금')
+        self.assertEqual(response.data['installment_number'], 1)
+        self.assertEqual(Decimal(response.data['total_amount']), Decimal('28000.00'))
+        self.assertEqual(response.data['remaining_installments'], 12)
+
+    def test_remaining_installments_decreases_after_a_repay(self):
+        loan = self._create_active_loan(self.borrower)
+        self.client.force_authenticate(user=self.borrower)
+        self.client.post(_repay_url(loan.id), {'idempotency_key': 'repay-1'}, format='json')
+
+        response = self.client.get(NEXT_REPAYMENT_URL)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['installment_number'], 2)
+        self.assertEqual(response.data['remaining_installments'], 11)
+
+    def test_not_scoped_to_other_borrowers_loans(self):
+        self._create_active_loan(self.other_borrower)
+        self.client.force_authenticate(user=self.borrower)
+
+        response = self.client.get(NEXT_REPAYMENT_URL)
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_returns_404_when_no_active_loan(self):
+        self.client.force_authenticate(user=self.borrower)
+
+        response = self.client.get(NEXT_REPAYMENT_URL)
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_without_authentication_returns_401(self):
+        response = self.client.get(NEXT_REPAYMENT_URL)
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
