@@ -18,3 +18,16 @@ class RepaymentSerializer(serializers.ModelSerializer):
 
     def get_installment_number(self, obj):
         return obj.schedule.installment_number
+
+
+class NextRepaymentSerializer(serializers.Serializer):
+    """로그인한 차주의 다음 상환 예정 회차 조회 응답."""
+
+    loan_id = serializers.IntegerField()
+    purpose = serializers.CharField()
+    installment_number = serializers.IntegerField()
+    principal = serializers.DecimalField(max_digits=14, decimal_places=2)
+    interest = serializers.DecimalField(max_digits=14, decimal_places=2)
+    total_amount = serializers.DecimalField(max_digits=14, decimal_places=2)
+    due_date = serializers.DateField()
+    remaining_installments = serializers.IntegerField()
