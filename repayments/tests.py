@@ -2,13 +2,19 @@ import calendar
 from datetime import date
 from decimal import Decimal
 
+from rest_framework import status
 from rest_framework.test import APITestCase
 
 from accounts.models import User
 from investments.services import create_investment
+from ledger.models import Ledger
 from loans.models import Loan, LoanApplication
-from repayments.models import RepaymentSchedule
+from repayments.models import Distribution, Repayment, RepaymentSchedule
 from repayments.services import generate_schedule
+
+
+def _repay_url(loan_id):
+    return f'/api/loans/{loan_id}/repay/'
 
 
 def _add_months(base_date, months):
@@ -101,3 +107,227 @@ class ScheduleGenerationTests(APITestCase):
         generate_schedule(loan)
 
         self.assertEqual(RepaymentSchedule.objects.filter(loan=loan).count(), 12)
+
+
+class RepaymentAPITests(APITestCase):
+    """POST /api/loans/{id}/repay/ 상환 납부 API 테스트 (REQ-015~026)."""
+
+    def setUp(self):
+        self.borrower = User.objects.create_user(username='borrower', email='borrower@example.com', password='S7rongPass!2024')
+        self.borrower.balance = Decimal('1000000.00')
+        self.borrower.save()
+        self.investor_a = User.objects.create_user(username='investor_a', email='investor_a@example.com', password='S7rongPass!2024')
+        self.investor_b = User.objects.create_user(username='investor_b', email='investor_b@example.com', password='S7rongPass!2024')
+        self.investor_c = User.objects.create_user(username='investor_c', email='investor_c@example.com', password='S7rongPass!2024')
+        for investor in (self.investor_a, self.investor_b, self.investor_c):
+            investor.balance = Decimal('200000.00')
+            investor.save()
+
+    def _create_loan(self, target_amount, term_months, interest_rate=Decimal('12.00'), investor_rate=Decimal('10.00')):
+        application = LoanApplication.objects.create(
+            user=self.borrower, amount=target_amount, purpose='사업자금', term_months=term_months,
+            status=LoanApplication.Status.APPROVED,
+        )
+        return Loan.objects.create(
+            application=application, interest_rate=interest_rate, investor_rate=investor_rate,
+            target_amount=target_amount, funded_amount=Decimal('0'), term_months=term_months,
+            funding_deadline='2026-12-01', status=Loan.Status.FUNDRAISING,
+        )
+
+    def _create_active_loan_three_way(self):
+        """300,000원/12개월 대출을 투자자 3명이 각 100,000원(균등)씩 투자해 실행 상태로 만든다."""
+        loan = self._create_loan(target_amount=Decimal('300000.00'), term_months=12)
+        create_investment(loan_id=loan.id, investor=self.investor_a, amount=Decimal('100000.00'), idempotency_key='fund-a')
+        create_investment(loan_id=loan.id, investor=self.investor_b, amount=Decimal('100000.00'), idempotency_key='fund-b')
+        create_investment(loan_id=loan.id, investor=self.investor_c, amount=Decimal('100000.00'), idempotency_key='fund-c')
+        loan.refresh_from_db()
+        return loan
+
+    def _create_active_loan_single_investor(self, target_amount, term_months, interest_rate=Decimal('12.00'), investor_rate=Decimal('10.00')):
+        loan = self._create_loan(target_amount, term_months, interest_rate, investor_rate)
+        create_investment(loan_id=loan.id, investor=self.investor_a, amount=target_amount, idempotency_key='fund-solo')
+        loan.refresh_from_db()
+        return loan
+
+    # REQ-015
+    def test_repay_happy_path_deducts_balance_and_marks_schedule_paid(self):
+        loan = self._create_active_loan_three_way()
+        self.client.force_authenticate(user=self.borrower)
+
+        response = self.client.post(_repay_url(loan.id), {'idempotency_key': 'repay-1'}, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        repayment = Repayment.objects.get(idempotency_key='repay-1')
+        self.assertEqual(response.data['id'], repayment.id)
+        self.assertEqual(response.data['loan'], loan.id)
+        self.assertEqual(response.data['installment_number'], 1)
+        self.assertEqual(Decimal(response.data['amount']), Decimal('28000.00'))
+        self.assertEqual(response.data['idempotency_key'], 'repay-1')
+        self.assertIn('created_at', response.data)
+
+        self.borrower.refresh_from_db()
+        self.assertEqual(self.borrower.balance, Decimal('972000.00'))
+
+        schedule1 = RepaymentSchedule.objects.get(loan=loan, installment_number=1)
+        self.assertEqual(schedule1.status, RepaymentSchedule.Status.PAID)
+        self.assertIsNotNone(schedule1.paid_at)
+
+        ledger = Ledger.objects.get(user=self.borrower, type=Ledger.Type.REPAY)
+        self.assertEqual(ledger.amount, Decimal('28000.00'))
+        self.assertEqual(ledger.balance_after, Decimal('972000.00'))
+
+    # REQ-016
+    def test_repay_next_call_pays_next_installment(self):
+        loan = self._create_active_loan_three_way()
+        self.client.force_authenticate(user=self.borrower)
+        self.client.post(_repay_url(loan.id), {'idempotency_key': 'repay-1'}, format='json')
+
+        response = self.client.post(_repay_url(loan.id), {'idempotency_key': 'repay-2'}, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data['installment_number'], 2)
+        schedule1 = RepaymentSchedule.objects.get(loan=loan, installment_number=1)
+        schedule2 = RepaymentSchedule.objects.get(loan=loan, installment_number=2)
+        self.assertEqual(schedule1.status, RepaymentSchedule.Status.PAID)
+        self.assertEqual(schedule2.status, RepaymentSchedule.Status.PAID)
+        self.borrower.refresh_from_db()
+        self.assertEqual(self.borrower.balance, Decimal('944250.00'))
+
+    # REQ-017
+    def test_repay_distributes_to_investors_with_remainder_absorbed_by_last(self):
+        loan = self._create_active_loan_three_way()
+        self.client.force_authenticate(user=self.borrower)
+
+        response = self.client.post(_repay_url(loan.id), {'idempotency_key': 'repay-1'}, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.investor_a.refresh_from_db()
+        self.investor_b.refresh_from_db()
+        self.investor_c.refresh_from_db()
+        # 원금 25,000.00 + 투자자 몫 이자 2,500.00 = 27,500.00을 1/3씩 균등 분배.
+        # 단순 반올림 시 (a=8333.33+833.33)+(b=동일)+(c=동일) 합계가 27,499.98로 0.02 모자라므로
+        # 마지막 투자건(investor_c)이 잔액을 흡수해 9,166.68을 받는다.
+        # 투자자 잔액은 100,000원 투자 후 100,000원으로 줄어든 상태에서 분배금이 더해진다.
+        self.assertEqual(self.investor_a.balance, Decimal('109166.66'))
+        self.assertEqual(self.investor_b.balance, Decimal('109166.66'))
+        self.assertEqual(self.investor_c.balance, Decimal('109166.68'))
+
+        self.assertEqual(Distribution.objects.count(), 3)
+        dist_a = Distribution.objects.get(investor=self.investor_a)
+        dist_b = Distribution.objects.get(investor=self.investor_b)
+        dist_c = Distribution.objects.get(investor=self.investor_c)
+        self.assertEqual(dist_a.amount, Decimal('9166.66'))
+        self.assertEqual(dist_b.amount, Decimal('9166.66'))
+        self.assertEqual(dist_c.amount, Decimal('9166.68'))
+        self.assertEqual(dist_a.amount + dist_b.amount + dist_c.amount, Decimal('27500.00'))
+
+        self.assertEqual(Ledger.objects.filter(type=Ledger.Type.DISTRIBUTION).count(), 3)
+        ledger_c = Ledger.objects.get(user=self.investor_c, type=Ledger.Type.DISTRIBUTION)
+        self.assertEqual(ledger_c.amount, Decimal('9166.68'))
+        self.assertEqual(ledger_c.balance_after, Decimal('109166.68'))
+
+    # REQ-018
+    def test_repay_duplicate_idempotency_key_does_not_double_deduct_or_distribute(self):
+        loan = self._create_active_loan_three_way()
+        self.client.force_authenticate(user=self.borrower)
+
+        first = self.client.post(_repay_url(loan.id), {'idempotency_key': 'shared-key'}, format='json')
+        second = self.client.post(_repay_url(loan.id), {'idempotency_key': 'shared-key'}, format='json')
+
+        self.assertIn(first.status_code, (status.HTTP_200_OK, status.HTTP_201_CREATED))
+        self.assertIn(second.status_code, (status.HTTP_200_OK, status.HTTP_201_CREATED))
+        self.assertEqual(Repayment.objects.filter(borrower=self.borrower, idempotency_key='shared-key').count(), 1)
+        self.assertEqual(Distribution.objects.count(), 3)
+        self.borrower.refresh_from_db()
+        self.assertEqual(self.borrower.balance, Decimal('972000.00'))
+        self.investor_a.refresh_from_db()
+        self.assertEqual(self.investor_a.balance, Decimal('109166.66'))
+
+    # REQ-019
+    def test_repay_by_non_borrower_returns_400_with_no_side_effects(self):
+        loan = self._create_active_loan_three_way()
+        self.client.force_authenticate(user=self.investor_a)
+
+        response = self.client.post(_repay_url(loan.id), {'idempotency_key': 'not-borrower'}, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('loan', response.data)
+        self.assertEqual(Repayment.objects.count(), 0)
+        schedule1 = RepaymentSchedule.objects.get(loan=loan, installment_number=1)
+        self.assertEqual(schedule1.status, RepaymentSchedule.Status.PENDING)
+        self.borrower.refresh_from_db()
+        self.assertEqual(self.borrower.balance, Decimal('1000000.00'))
+
+    # REQ-020
+    def test_repay_when_loan_not_active_returns_400_with_no_side_effects(self):
+        loan = self._create_loan(target_amount=Decimal('300000.00'), term_months=12)
+        self.client.force_authenticate(user=self.borrower)
+
+        response = self.client.post(_repay_url(loan.id), {'idempotency_key': 'not-active'}, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('loan', response.data)
+        self.assertEqual(Repayment.objects.count(), 0)
+        self.borrower.refresh_from_db()
+        self.assertEqual(self.borrower.balance, Decimal('1000000.00'))
+
+    # REQ-021
+    def test_repay_with_insufficient_balance_returns_400_with_no_side_effects(self):
+        loan = self._create_active_loan_three_way()
+        self.borrower.balance = Decimal('100.00')
+        self.borrower.save()
+        self.client.force_authenticate(user=self.borrower)
+
+        response = self.client.post(_repay_url(loan.id), {'idempotency_key': 'poor'}, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('balance', response.data)
+        self.assertEqual(Repayment.objects.count(), 0)
+        schedule1 = RepaymentSchedule.objects.get(loan=loan, installment_number=1)
+        self.assertEqual(schedule1.status, RepaymentSchedule.Status.PENDING)
+        self.borrower.refresh_from_db()
+        self.assertEqual(self.borrower.balance, Decimal('100.00'))
+        self.assertEqual(Ledger.objects.filter(type=Ledger.Type.REPAY).count(), 0)
+
+    # REQ-022 / REQ-023
+    def test_repay_last_installment_completes_loan_and_further_repay_returns_400(self):
+        loan = self._create_active_loan_single_investor(target_amount=Decimal('200000.00'), term_months=2)
+        self.client.force_authenticate(user=self.borrower)
+
+        first = self.client.post(_repay_url(loan.id), {'idempotency_key': 'final-1'}, format='json')
+        second = self.client.post(_repay_url(loan.id), {'idempotency_key': 'final-2'}, format='json')
+
+        self.assertEqual(first.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(second.status_code, status.HTTP_201_CREATED)
+        loan.refresh_from_db()
+        self.assertEqual(loan.status, Loan.Status.COMPLETED)
+
+        third = self.client.post(_repay_url(loan.id), {'idempotency_key': 'final-3'}, format='json')
+        self.assertEqual(third.status_code, status.HTTP_400_BAD_REQUEST)
+        self.assertIn('loan', third.data)
+        self.assertEqual(Repayment.objects.filter(loan=loan).count(), 2)
+
+    # REQ-024
+    def test_repay_without_authentication_returns_401(self):
+        loan = self._create_active_loan_three_way()
+
+        response = self.client.post(_repay_url(loan.id), {'idempotency_key': 'anon'}, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    # REQ-025
+    def test_repay_with_nonexistent_loan_returns_404(self):
+        self.client.force_authenticate(user=self.borrower)
+
+        response = self.client.post(_repay_url(999999), {'idempotency_key': 'none'}, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    # REQ-026
+    def test_repay_without_idempotency_key_returns_400(self):
+        loan = self._create_active_loan_three_way()
+        self.client.force_authenticate(user=self.borrower)
+
+        response = self.client.post(_repay_url(loan.id), {}, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)

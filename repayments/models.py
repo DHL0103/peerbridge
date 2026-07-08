@@ -1,5 +1,7 @@
+from django.conf import settings
 from django.db import models
 
+from investments.models import Investment
 from loans.models import Loan
 
 
@@ -28,3 +30,39 @@ class RepaymentSchedule(models.Model):
 
     def __str__(self):
         return f'{self.loan_id} #{self.installment_number} {self.status}'
+
+
+class Repayment(models.Model):
+    """차주가 회차별로 실제 납부한 상환 내역."""
+
+    loan = models.ForeignKey(Loan, on_delete=models.PROTECT, related_name='repayments')
+    schedule = models.OneToOneField(RepaymentSchedule, on_delete=models.PROTECT, related_name='repayment')
+    borrower = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='repayments')
+    amount = models.DecimalField(max_digits=14, decimal_places=2)
+    idempotency_key = models.CharField(max_length=100)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+        constraints = [
+            models.UniqueConstraint(fields=['borrower', 'idempotency_key'], name='unique_borrower_idempotency_key'),
+        ]
+
+    def __str__(self):
+        return f'{self.borrower_id} -> loan {self.loan_id} {self.amount}'
+
+
+class Distribution(models.Model):
+    """상환금을 투자 비율에 따라 투자자에게 분배한 내역."""
+
+    repayment = models.ForeignKey(Repayment, on_delete=models.PROTECT, related_name='distributions')
+    investment = models.ForeignKey(Investment, on_delete=models.PROTECT, related_name='distributions')
+    investor = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='distributions')
+    amount = models.DecimalField(max_digits=14, decimal_places=2)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        ordering = ['-created_at']
+
+    def __str__(self):
+        return f'{self.investor_id} <- repayment {self.repayment_id} {self.amount}'
