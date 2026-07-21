@@ -1,6 +1,6 @@
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError as DjangoValidationError
-from django.db import IntegrityError
+from django.db import IntegrityError, transaction
 from rest_framework import serializers
 
 from accounts.models import BankAccount, User
@@ -80,9 +80,11 @@ class BankAccountSerializer(serializers.ModelSerializer):
         read_only_fields = ['id', 'is_primary', 'created_at']
 
     def create(self, validated_data):
-        user = self.context['request'].user
-        validated_data['is_primary'] = not BankAccount.objects.filter(user=user).exists()
-        return BankAccount.objects.create(user=user, **validated_data)
+        request_user = self.context['request'].user
+        with transaction.atomic():
+            user = User.objects.select_for_update().get(pk=request_user.pk)
+            validated_data['is_primary'] = not BankAccount.objects.filter(user=user).exists()
+            return BankAccount.objects.create(user=user, **validated_data)
 
 
 class PasswordChangeSerializer(serializers.Serializer):
