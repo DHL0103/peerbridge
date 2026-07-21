@@ -5,6 +5,7 @@ from accounts.models import User
 from investments.models import Investment
 from ledger.models import Ledger
 from loans.models import Loan
+from repayments import services as repayments_services
 
 
 class LoanNotFundraisingError(Exception):
@@ -48,6 +49,8 @@ def create_investment(*, loan_id, investor, amount, idempotency_key):
             if loan.funded_amount >= loan.target_amount:
                 loan.status = Loan.Status.ACTIVE
             loan.save(update_fields=['funded_amount', 'status'])
+            if loan.status == Loan.Status.ACTIVE:
+                repayments_services.generate_schedule(loan)
 
             Ledger.objects.create(
                 user=locked_investor, type=Ledger.Type.INVEST, amount=amount, balance_after=locked_investor.balance,
