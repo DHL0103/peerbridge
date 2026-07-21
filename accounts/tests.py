@@ -1,5 +1,9 @@
+import threading
+
+from django.db import connection
+from django.test import TransactionTestCase
 from rest_framework import status
-from rest_framework.test import APITestCase
+from rest_framework.test import APIClient, APITestCase
 from rest_framework_simplejwt.tokens import RefreshToken
 
 from accounts.models import BankAccount, User
@@ -582,3 +586,37 @@ class BankAccountAPITests(APITestCase):
         response = self.client.post(set_primary_url(other_account.id))
 
         self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+
+class BankAccountRaceConditionAPITests(TransactionTestCase):
+    """계좌 동시 등록 시 기본계좌 중복 지정 레이스컨디션 재현 테스트 (실제 스레드/DB 트랜잭션 필요)."""
+
+    def setUp(self):
+        self.user = User.objects.create_user(
+            username='raceuser', email='raceuser@example.com', password='S7rongPass!2024',
+        )
+
+    def test_concurrent_first_account_creation_results_in_single_primary(self):
+        barrier = threading.Barrier(5)
+        responses = []
+
+        def worker(i):
+            client = APIClient()
+            client.force_authenticate(user=self.user)
+            barrier.wait()
+            responses.append(client.post(
+                BANK_ACCOUNTS_URL,
+                {'bank_name': 'KB국민', 'account_number': str(i), 'account_holder': '홍길동'},
+                format='json',
+            ))
+            connection.close()
+
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(5)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        self.assertTrue(all(r.status_code == status.HTTP_201_CREATED for r in responses))
+        primary_count = BankAccount.objects.filter(user=self.user, is_primary=True).count()
+        self.assertEqual(primary_count, 1)
