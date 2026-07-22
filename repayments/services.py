@@ -1,6 +1,6 @@
 import calendar
 from datetime import date
-from decimal import ROUND_DOWN, ROUND_HALF_UP, Decimal
+from decimal import ROUND_CEILING, ROUND_DOWN, ROUND_HALF_UP, Decimal
 
 from django.db import IntegrityError, transaction
 from django.shortcuts import get_object_or_404
@@ -67,19 +67,20 @@ def generate_schedule(loan):
 def _distribute(*, repayment, schedule, loan):
     """상환 회차의 원금+투자자 몫 이자를 투자 비율대로 분배한다.
 
-    투자자 몫은 전부 원 단위 절사(ROUND_DOWN)한다 — 반올림으로 투자자가 남보다 더 받는 일이 없도록.
-    절사로 남은 잔여분과 이자 스프레드(interest_rate-investor_rate 차액)는 합쳐서 플랫폼 계좌로 귀속된다.
+    투자자에게는 소숫점 없는 원 단위로 올림(ROUND_CEILING)해서 지급한다 — 투자자가 잔돈을 받는 일이 없도록.
+    올림으로 더 나간 금액과 이자 스프레드(interest_rate-investor_rate 차액)는 플랫폼 계좌에서 상계된다
+    (플랫폼 수수료가 그만큼 줄어듦).
     """
     total_investor_interest = (schedule.interest * loan.investor_rate / loan.interest_rate).quantize(
         Decimal('0.01'), rounding=ROUND_HALF_UP,
     )
+    investors_pool = schedule.principal + total_investor_interest
+
     investments = list(Investment.objects.filter(loan=loan).select_for_update().order_by('id'))
     distributed_total = Decimal('0')
     for investment in investments:
         share = investment.amount / loan.funded_amount
-        principal_share = (schedule.principal * share).quantize(Decimal('0.01'), rounding=ROUND_DOWN)
-        interest_share = (total_investor_interest * share).quantize(Decimal('0.01'), rounding=ROUND_DOWN)
-        distribution_amount = principal_share + interest_share
+        distribution_amount = (investors_pool * share).quantize(Decimal('1'), rounding=ROUND_CEILING)
         distributed_total += distribution_amount
 
         investor = User.objects.select_for_update().get(pk=investment.investor_id)
@@ -93,13 +94,12 @@ def _distribute(*, repayment, schedule, loan):
         )
 
     platform_fee = schedule.total_amount - distributed_total
-    if platform_fee > 0:
-        platform = User.objects.select_for_update().get(username=PLATFORM_USERNAME)
-        platform.balance += platform_fee
-        platform.save(update_fields=['balance'])
-        Ledger.objects.create(
-            user=platform, type=Ledger.Type.PLATFORM_FEE, amount=platform_fee, balance_after=platform.balance,
-        )
+    platform = User.objects.select_for_update().get(username=PLATFORM_USERNAME)
+    platform.balance += platform_fee
+    platform.save(update_fields=['balance'])
+    Ledger.objects.create(
+        user=platform, type=Ledger.Type.PLATFORM_FEE, amount=platform_fee, balance_after=platform.balance,
+    )
 
 
 def repay(*, loan_id, borrower, idempotency_key):
