@@ -194,7 +194,7 @@ class RepaymentAPITests(APITestCase):
         self.assertEqual(self.borrower.balance, Decimal('944250.00'))
 
     # REQ-017
-    def test_repay_distributes_to_investors_rounded_down_evenly(self):
+    def test_repay_distributes_to_investors_rounded_up_to_whole_won(self):
         loan = self._create_active_loan_three_way()
         self.client.force_authenticate(user=self.borrower)
 
@@ -205,41 +205,41 @@ class RepaymentAPITests(APITestCase):
         self.investor_b.refresh_from_db()
         self.investor_c.refresh_from_db()
         # 원금 25,000.00 + 투자자 몫 이자 2,500.00 = 27,500.00을 1/3씩 분배.
-        # 투자자별로 원 단위 절사(ROUND_DOWN)해서 모두 동일하게 9,166.66을 받고,
-        # 절사로 남은 0.02원은 스프레드와 함께 플랫폼 계좌로 귀속된다.
+        # 투자자에게는 소숫점 없이 원 단위로 올림(9,166.66... -> 9,167)해서 지급하고,
+        # 올림으로 더 나간 금액은 플랫폼 몫에서 상계된다.
         # 투자자 잔액은 100,000원 투자 후 100,000원으로 줄어든 상태에서 분배금이 더해진다.
-        self.assertEqual(self.investor_a.balance, Decimal('109166.66'))
-        self.assertEqual(self.investor_b.balance, Decimal('109166.66'))
-        self.assertEqual(self.investor_c.balance, Decimal('109166.66'))
+        self.assertEqual(self.investor_a.balance, Decimal('109167.00'))
+        self.assertEqual(self.investor_b.balance, Decimal('109167.00'))
+        self.assertEqual(self.investor_c.balance, Decimal('109167.00'))
 
         self.assertEqual(Distribution.objects.count(), 3)
         dist_a = Distribution.objects.get(investor=self.investor_a)
         dist_b = Distribution.objects.get(investor=self.investor_b)
         dist_c = Distribution.objects.get(investor=self.investor_c)
-        self.assertEqual(dist_a.amount, Decimal('9166.66'))
-        self.assertEqual(dist_b.amount, Decimal('9166.66'))
-        self.assertEqual(dist_c.amount, Decimal('9166.66'))
-        self.assertEqual(dist_a.amount + dist_b.amount + dist_c.amount, Decimal('27499.98'))
+        self.assertEqual(dist_a.amount, Decimal('9167.00'))
+        self.assertEqual(dist_b.amount, Decimal('9167.00'))
+        self.assertEqual(dist_c.amount, Decimal('9167.00'))
+        self.assertEqual(dist_a.amount + dist_b.amount + dist_c.amount, Decimal('27501.00'))
 
         self.assertEqual(Ledger.objects.filter(type=Ledger.Type.DISTRIBUTION).count(), 3)
         ledger_c = Ledger.objects.get(user=self.investor_c, type=Ledger.Type.DISTRIBUTION)
-        self.assertEqual(ledger_c.amount, Decimal('9166.66'))
-        self.assertEqual(ledger_c.balance_after, Decimal('109166.66'))
+        self.assertEqual(ledger_c.amount, Decimal('9167.00'))
+        self.assertEqual(ledger_c.balance_after, Decimal('109167.00'))
 
     # REQ-017
-    def test_repay_credits_platform_account_with_spread_and_rounding_remainder(self):
+    def test_repay_credits_platform_account_with_spread_minus_rounding_up_cost(self):
         loan = self._create_active_loan_three_way()
         self.client.force_authenticate(user=self.borrower)
 
         self.client.post(_repay_url(loan.id), {'idempotency_key': 'repay-1'}, format='json')
 
-        # 스프레드(이자 3,000 - 투자자 몫 2,500 = 500.00) + 원금/이자 절사 잔여분(0.01+0.01) = 500.02.
+        # 스프레드(이자 3,000 - 투자자 몫 2,500 = 500.00)에서, 투자자 올림 지급으로 더 나간 1.00원을 뺀 499.00원.
         platform = User.objects.get(username=PLATFORM_USERNAME)
         platform.refresh_from_db()
-        self.assertEqual(platform.balance, Decimal('500.02'))
+        self.assertEqual(platform.balance, Decimal('499.00'))
         ledger = Ledger.objects.get(user=platform, type=Ledger.Type.PLATFORM_FEE)
-        self.assertEqual(ledger.amount, Decimal('500.02'))
-        self.assertEqual(ledger.balance_after, Decimal('500.02'))
+        self.assertEqual(ledger.amount, Decimal('499.00'))
+        self.assertEqual(ledger.balance_after, Decimal('499.00'))
 
     # REQ-018
     def test_repay_duplicate_idempotency_key_does_not_double_deduct_or_distribute(self):
@@ -256,7 +256,7 @@ class RepaymentAPITests(APITestCase):
         self.borrower.refresh_from_db()
         self.assertEqual(self.borrower.balance, Decimal('972000.00'))
         self.investor_a.refresh_from_db()
-        self.assertEqual(self.investor_a.balance, Decimal('109166.66'))
+        self.assertEqual(self.investor_a.balance, Decimal('109167.00'))
 
     # REQ-019
     def test_repay_by_non_borrower_returns_400_with_no_side_effects(self):
