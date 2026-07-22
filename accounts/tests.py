@@ -591,6 +591,10 @@ class BankAccountAPITests(APITestCase):
 class BankAccountRaceConditionAPITests(TransactionTestCase):
     """계좌 동시 등록 시 기본계좌 중복 지정 레이스컨디션 재현 테스트 (실제 스레드/DB 트랜잭션 필요)."""
 
+    # TransactionTestCase는 테스트 후 전체 테이블을 flush하는데, serialized_rollback 없이는
+    # 데이터 마이그레이션으로 심어둔 row(예: platform 계좌)까지 같이 날아가 이후 테스트에 영향을 준다.
+    serialized_rollback = True
+
     def setUp(self):
         self.user = User.objects.create_user(
             username='raceuser', email='raceuser@example.com', password='S7rongPass!2024',
