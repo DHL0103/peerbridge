@@ -1,6 +1,8 @@
 from django.contrib.auth.models import AbstractUser
 from django.db import models
 
+PLATFORM_USERNAME = 'platform'
+
 
 class User(AbstractUser):
     """차주(borrower)와 투자자(investor) 역할을 동시에 수행할 수 있는 플랫폼 사용자."""

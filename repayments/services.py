@@ -1,12 +1,12 @@
 import calendar
 from datetime import date
-from decimal import ROUND_DOWN, ROUND_HALF_UP, Decimal
+from decimal import ROUND_CEILING, ROUND_DOWN, ROUND_HALF_UP, Decimal
 
 from django.db import IntegrityError, transaction
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 
-from accounts.models import User
+from accounts.models import PLATFORM_USERNAME, User
 from investments.models import Investment
 from ledger.models import Ledger
 from loans.models import Loan
@@ -65,25 +65,24 @@ def generate_schedule(loan):
 
 
 def _distribute(*, repayment, schedule, loan):
-    """상환 회차의 원금+투자자 몫 이자를 투자 비율대로 분배한다 (마지막 투자건이 반올림 잔여분 흡수)."""
+    """상환 회차의 원금+투자자 몫 이자를 투자 비율대로 분배한다.
+
+    투자자에게는 소숫점 없는 원 단위로 올림(ROUND_CEILING)해서 지급한다 — 투자자가 잔돈을 받는 일이 없도록.
+    올림으로 더 나간 금액과 이자 스프레드(interest_rate-investor_rate 차액)는 플랫폼 계좌에서 상계된다
+    (플랫폼 수수료가 그만큼 줄어듦).
+    """
     total_investor_interest = (schedule.interest * loan.investor_rate / loan.interest_rate).quantize(
         Decimal('0.01'), rounding=ROUND_HALF_UP,
     )
-    investments = list(Investment.objects.filter(loan=loan).select_for_update().order_by('id'))
-    principal_running_total = Decimal('0')
-    interest_running_total = Decimal('0')
-    for index, investment in enumerate(investments):
-        share = investment.amount / loan.funded_amount
-        if index == len(investments) - 1:
-            principal_share = schedule.principal - principal_running_total
-            interest_share = total_investor_interest - interest_running_total
-        else:
-            principal_share = (schedule.principal * share).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-            interest_share = (total_investor_interest * share).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
-            principal_running_total += principal_share
-            interest_running_total += interest_share
+    investors_pool = schedule.principal + total_investor_interest
 
-        distribution_amount = principal_share + interest_share
+    investments = list(Investment.objects.filter(loan=loan).select_for_update().order_by('id'))
+    distributed_total = Decimal('0')
+    for investment in investments:
+        share = investment.amount / loan.funded_amount
+        distribution_amount = (investors_pool * share).quantize(Decimal('1'), rounding=ROUND_CEILING)
+        distributed_total += distribution_amount
+
         investor = User.objects.select_for_update().get(pk=investment.investor_id)
         investor.balance += distribution_amount
         investor.save(update_fields=['balance'])
@@ -93,8 +92,14 @@ def _distribute(*, repayment, schedule, loan):
         Ledger.objects.create(
             user=investor, type=Ledger.Type.DISTRIBUTION, amount=distribution_amount, balance_after=investor.balance,
         )
-    # ponytail: 스프레드(schedule.interest - total_investor_interest)는 플랫폼 소유 User가 아직 없어 PLATFORM_FEE
-    # Ledger로 남기지 않는다. 플랫폼 계정 모델링 시 여기에 추가.
+
+    platform_fee = schedule.total_amount - distributed_total
+    platform = User.objects.select_for_update().get(username=PLATFORM_USERNAME)
+    platform.balance += platform_fee
+    platform.save(update_fields=['balance'])
+    Ledger.objects.create(
+        user=platform, type=Ledger.Type.PLATFORM_FEE, amount=platform_fee, balance_after=platform.balance,
+    )
 
 
 def repay(*, loan_id, borrower, idempotency_key):
