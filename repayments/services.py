@@ -102,6 +102,22 @@ def _distribute(*, repayment, schedule, loan):
     )
 
 
+def _late_fee(schedule, loan):
+    """연체가산이자 = 회차 미납액 x 연체가산 반영 이자율(loan.effective_interest_rate) x 연체일수/365.
+
+    연체가산이자는 투자자 분배와 무관하게 전액 플랫폼 몫으로 귀속된다(투자자 약정수익률은 불변).
+    """
+    if schedule.due_date >= date.today():
+        return Decimal('0')
+    overdue_days = (date.today() - schedule.due_date).days
+    return (
+        schedule.total_amount * loan.effective_interest_rate / Decimal('100') / Decimal('365') * overdue_days
+    ).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP)
+
+
+REPAYABLE_STATUSES = (Loan.Status.ACTIVE, Loan.Status.OVERDUE_1, Loan.Status.OVERDUE_2, Loan.Status.DEFAULT)
+
+
 def repay(*, loan_id, borrower, idempotency_key):
     """반환: (repayment, created). created=False면 idempotency_key 재사용으로 기존 걸 반환한 것."""
     try:
@@ -113,7 +129,7 @@ def repay(*, loan_id, borrower, idempotency_key):
             loan = get_object_or_404(Loan.objects.select_for_update(), pk=loan_id)
             if loan.borrower != borrower:
                 raise NotBorrowerError
-            if loan.status != Loan.Status.ACTIVE:
+            if loan.status not in REPAYABLE_STATUSES:
                 raise LoanNotActiveError
 
             schedule = RepaymentSchedule.objects.select_for_update().filter(
@@ -122,15 +138,18 @@ def repay(*, loan_id, borrower, idempotency_key):
             if schedule is None:
                 raise NoPendingInstallmentError
 
+            late_fee = _late_fee(schedule, loan)
+            total_due = schedule.total_amount + late_fee
+
             locked_borrower = User.objects.select_for_update().get(pk=borrower.pk)
-            if locked_borrower.balance < schedule.total_amount:
+            if locked_borrower.balance < total_due:
                 raise InsufficientBalanceError
 
-            locked_borrower.balance -= schedule.total_amount
+            locked_borrower.balance -= total_due
             locked_borrower.save(update_fields=['balance'])
 
             repayment = Repayment.objects.create(
-                loan=loan, schedule=schedule, borrower=locked_borrower, amount=schedule.total_amount,
+                loan=loan, schedule=schedule, borrower=locked_borrower, amount=total_due,
                 idempotency_key=idempotency_key,
             )
 
@@ -139,11 +158,20 @@ def repay(*, loan_id, borrower, idempotency_key):
             schedule.save(update_fields=['status', 'paid_at'])
 
             Ledger.objects.create(
-                user=locked_borrower, type=Ledger.Type.REPAY, amount=schedule.total_amount,
+                user=locked_borrower, type=Ledger.Type.REPAY, amount=total_due,
                 balance_after=locked_borrower.balance,
             )
 
             _distribute(repayment=repayment, schedule=schedule, loan=loan)
+
+            if late_fee > 0:
+                platform = User.objects.select_for_update().get(username=PLATFORM_USERNAME)
+                platform.balance += late_fee
+                platform.save(update_fields=['balance'])
+                Ledger.objects.create(
+                    user=platform, type=Ledger.Type.PLATFORM_FEE, amount=late_fee,
+                    balance_after=platform.balance, memo='연체가산이자',
+                )
 
             if not RepaymentSchedule.objects.filter(loan=loan, status=RepaymentSchedule.Status.PENDING).exists():
                 loan.status = Loan.Status.COMPLETED

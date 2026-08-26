@@ -9,6 +9,7 @@ class Ledger(models.Model):
         CHARGE = 'CHARGE', '예치금 충전'
         WITHDRAW = 'WITHDRAW', '예치금 출금'
         INVEST = 'INVEST', '투자 실행'
+        INVEST_REFUND = 'INVEST_REFUND', '투자 환불'
         DISTRIBUTION = 'DISTRIBUTION', '상환 분배금 수령'
         REPAY = 'REPAY', '차주 상환 납부'
         PLATFORM_FEE = 'PLATFORM_FEE', '플랫폼 수수료'
