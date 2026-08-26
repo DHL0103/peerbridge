@@ -1,5 +1,5 @@
 import calendar
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal
 
 from rest_framework import status
@@ -285,6 +285,41 @@ class RepaymentAPITests(APITestCase):
         self.assertEqual(Repayment.objects.count(), 0)
         self.borrower.refresh_from_db()
         self.assertEqual(self.borrower.balance, Decimal('1000000.00'))
+
+    def test_repay_succeeds_while_loan_is_overdue(self):
+        loan = self._create_active_loan_three_way()
+        loan.status = Loan.Status.OVERDUE_2
+        loan.save(update_fields=['status'])
+        self.client.force_authenticate(user=self.borrower)
+
+        response = self.client.post(_repay_url(loan.id), {'idempotency_key': 'still-payable'}, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+
+    def test_repay_adds_late_fee_when_schedule_overdue(self):
+        loan = self._create_active_loan_three_way()
+        schedule1 = RepaymentSchedule.objects.get(loan=loan, installment_number=1)
+        schedule1.due_date = date.today() - timedelta(days=10)
+        schedule1.save(update_fields=['due_date'])
+        loan.status = Loan.Status.OVERDUE_1
+        loan.save(update_fields=['status'])
+        self.client.force_authenticate(user=self.borrower)
+
+        response = self.client.post(_repay_url(loan.id), {'idempotency_key': 'late-1'}, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        # 원금+이자 28,000.00에 연체가산이자(약정 12% + 3%p = 15%, 10일치) 115.07원이 추가됨.
+        self.assertEqual(Decimal(response.data['amount']), Decimal('28115.07'))
+        self.borrower.refresh_from_db()
+        self.assertEqual(self.borrower.balance, Decimal('971884.93'))
+
+        late_fee_ledger = Ledger.objects.get(user__username=PLATFORM_USERNAME, memo='연체가산이자')
+        self.assertEqual(late_fee_ledger.type, Ledger.Type.PLATFORM_FEE)
+        self.assertEqual(late_fee_ledger.amount, Decimal('115.07'))
+
+        # 투자자 분배는 연체가산이자와 무관하게 원래 스케줄 금액 기준 그대로.
+        self.investor_a.refresh_from_db()
+        self.assertEqual(self.investor_a.balance, Decimal('109167.00'))
 
     # REQ-021
     def test_repay_with_insufficient_balance_returns_400_with_no_side_effects(self):

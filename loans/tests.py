@@ -1,3 +1,4 @@
+from datetime import date, timedelta
 from decimal import Decimal
 
 from django.test import TestCase
@@ -9,6 +10,7 @@ from investments.models import Investment
 from ledger.models import Ledger
 from loans import services
 from loans.models import Loan, LoanApplication
+from repayments.models import RepaymentSchedule
 
 APPLICATIONS_URL = '/api/loans/applications/'
 PENDING_URL = '/api/loans/applications/pending/'
@@ -395,3 +397,99 @@ class ExpireFundraisingLoansServiceTests(TestCase):
         self.assertEqual(cancelled, [])
         loan.refresh_from_db()
         self.assertEqual(loan.status, Loan.Status.ACTIVE)
+
+
+class LoanEffectiveInterestRateTests(TestCase):
+    """연체 상태일 때 가산금리(최대 3%p, 법정 최고 20% 캡)가 적용되는지 테스트."""
+
+    def test_returns_base_rate_when_active(self):
+        loan = Loan(interest_rate=Decimal('15.00'), status=Loan.Status.ACTIVE)
+        self.assertEqual(loan.effective_interest_rate, Decimal('15.00'))
+
+    def test_adds_3_points_when_overdue_1(self):
+        loan = Loan(interest_rate=Decimal('15.00'), status=Loan.Status.OVERDUE_1)
+        self.assertEqual(loan.effective_interest_rate, Decimal('18.00'))
+
+    def test_adds_3_points_when_overdue_2_or_default(self):
+        loan = Loan(interest_rate=Decimal('15.00'), status=Loan.Status.DEFAULT)
+        self.assertEqual(loan.effective_interest_rate, Decimal('18.00'))
+
+    def test_caps_at_legal_max_20_percent(self):
+        loan = Loan(interest_rate=Decimal('19.00'), status=Loan.Status.OVERDUE_2)
+        self.assertEqual(loan.effective_interest_rate, Decimal('20.00'))
+
+
+class MarkOverdueLoansServiceTests(TestCase):
+    """상환일 지난 회차가 있는 대출을 연체 일수에 따라 자동 승급하는 서비스 테스트."""
+
+    def setUp(self):
+        self.borrower = User.objects.create_user(
+            username='borrower_ov', email='borrower_ov@example.com', password='S7rongPass!2024',
+        )
+
+    def _create_active_loan(self):
+        application = LoanApplication.objects.create(
+            user=self.borrower, amount=Decimal('1200000'), purpose='사업자금', term_months=12,
+            status=LoanApplication.Status.APPROVED,
+        )
+        return Loan.objects.create(
+            application=application, interest_rate=Decimal('15.00'), investor_rate=Decimal('12.00'),
+            target_amount=Decimal('1200000'), funded_amount=Decimal('1200000'), term_months=12,
+            funding_deadline='2020-01-01', status=Loan.Status.ACTIVE,
+        )
+
+    def _pending_schedule(self, loan, due_date):
+        return RepaymentSchedule.objects.create(
+            loan=loan, installment_number=1, due_date=due_date,
+            principal=Decimal('100000'), interest=Decimal('15000'), total_amount=Decimal('115000'),
+        )
+
+    def test_moves_to_overdue_1_within_30_days(self):
+        loan = self._create_active_loan()
+        self._pending_schedule(loan, due_date=date.today() - timedelta(days=10))
+
+        updated = services.mark_overdue_loans()
+
+        self.assertEqual([loan_.id for loan_ in updated], [loan.id])
+        loan.refresh_from_db()
+        self.assertEqual(loan.status, Loan.Status.OVERDUE_1)
+
+    def test_moves_to_overdue_2_after_30_days(self):
+        loan = self._create_active_loan()
+        self._pending_schedule(loan, due_date=date.today() - timedelta(days=45))
+
+        services.mark_overdue_loans()
+
+        loan.refresh_from_db()
+        self.assertEqual(loan.status, Loan.Status.OVERDUE_2)
+
+    def test_moves_to_default_after_90_days(self):
+        loan = self._create_active_loan()
+        self._pending_schedule(loan, due_date=date.today() - timedelta(days=100))
+
+        services.mark_overdue_loans()
+
+        loan.refresh_from_db()
+        self.assertEqual(loan.status, Loan.Status.DEFAULT)
+
+    def test_keeps_active_when_not_yet_due(self):
+        loan = self._create_active_loan()
+        self._pending_schedule(loan, due_date=date.today() + timedelta(days=5))
+
+        updated = services.mark_overdue_loans()
+
+        self.assertEqual(updated, [])
+        loan.refresh_from_db()
+        self.assertEqual(loan.status, Loan.Status.ACTIVE)
+
+    def test_does_not_downgrade_already_defaulted_loan(self):
+        loan = self._create_active_loan()
+        loan.status = Loan.Status.DEFAULT
+        loan.save(update_fields=['status'])
+        self._pending_schedule(loan, due_date=date.today() - timedelta(days=5))
+
+        updated = services.mark_overdue_loans()
+
+        self.assertEqual(updated, [])
+        loan.refresh_from_db()
+        self.assertEqual(loan.status, Loan.Status.DEFAULT)
