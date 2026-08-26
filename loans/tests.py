@@ -1,9 +1,13 @@
 from decimal import Decimal
 
+from django.test import TestCase
 from rest_framework import status
 from rest_framework.test import APITestCase
 
 from accounts.models import User
+from investments.models import Investment
+from ledger.models import Ledger
+from loans import services
 from loans.models import Loan, LoanApplication
 
 APPLICATIONS_URL = '/api/loans/applications/'
@@ -329,3 +333,65 @@ class LoanDetailAPITests(APITestCase):
         response = self.client.get(loan_detail_url(self.loan.id))
 
         self.assertEqual(response.status_code, status.HTTP_200_OK)
+
+
+class ExpireFundraisingLoansServiceTests(TestCase):
+    """마감일 지난 모집중 대출 자동 취소 서비스 테스트."""
+
+    def setUp(self):
+        self.borrower = User.objects.create_user(
+            username='borrower_exp', email='borrower_exp@example.com', password='S7rongPass!2024',
+        )
+        self.investor = User.objects.create_user(
+            username='investor_exp', email='investor_exp@example.com', password='S7rongPass!2024',
+        )
+        self.investor.balance = Decimal('700000.00')
+        self.investor.save()
+
+    def _create_loan(self, funding_deadline, loan_status=Loan.Status.FUNDRAISING, funded_amount=Decimal('0')):
+        application = LoanApplication.objects.create(
+            user=self.borrower, amount=Decimal('1000000'), purpose='사업자금', term_months=12,
+            status=LoanApplication.Status.APPROVED,
+        )
+        return Loan.objects.create(
+            application=application, interest_rate=Decimal('15.00'), investor_rate=Decimal('12.00'),
+            target_amount=Decimal('1000000'), funded_amount=funded_amount, term_months=12,
+            funding_deadline=funding_deadline, status=loan_status,
+        )
+
+    def test_cancels_loan_and_refunds_investors_when_deadline_passed(self):
+        loan = self._create_loan(funding_deadline='2020-01-01', funded_amount=Decimal('300000.00'))
+        Investment.objects.create(
+            loan=loan, investor=self.investor, amount=Decimal('300000.00'), idempotency_key='key-1',
+        )
+
+        cancelled = services.expire_fundraising_loans()
+
+        self.assertEqual([loan_.id for loan_ in cancelled], [loan.id])
+        loan.refresh_from_db()
+        self.assertEqual(loan.status, Loan.Status.CANCELLED)
+        self.investor.refresh_from_db()
+        self.assertEqual(self.investor.balance, Decimal('1000000.00'))
+        ledger = Ledger.objects.get(user=self.investor, type=Ledger.Type.INVEST_REFUND)
+        self.assertEqual(ledger.amount, Decimal('300000.00'))
+        self.assertEqual(ledger.balance_after, Decimal('1000000.00'))
+
+    def test_keeps_loan_when_deadline_not_yet_reached(self):
+        loan = self._create_loan(funding_deadline='2099-01-01')
+
+        cancelled = services.expire_fundraising_loans()
+
+        self.assertEqual(cancelled, [])
+        loan.refresh_from_db()
+        self.assertEqual(loan.status, Loan.Status.FUNDRAISING)
+
+    def test_ignores_active_loan_even_if_deadline_passed(self):
+        loan = self._create_loan(
+            funding_deadline='2020-01-01', loan_status=Loan.Status.ACTIVE, funded_amount=Decimal('1000000.00'),
+        )
+
+        cancelled = services.expire_fundraising_loans()
+
+        self.assertEqual(cancelled, [])
+        loan.refresh_from_db()
+        self.assertEqual(loan.status, Loan.Status.ACTIVE)
