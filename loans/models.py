@@ -36,6 +36,7 @@ class Loan(models.Model):
         DEFAULT = 'DEFAULT', '부실'
         WRITTEN_OFF = 'WRITTEN_OFF', '상각'
         COMPLETED = 'COMPLETED', '완료'
+        CANCELLED = 'CANCELLED', '모집취소'
 
     application = models.OneToOneField(LoanApplication, on_delete=models.PROTECT, related_name='loan')
     interest_rate = models.DecimalField(max_digits=5, decimal_places=2)
