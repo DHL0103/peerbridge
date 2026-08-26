@@ -1,5 +1,10 @@
+from decimal import Decimal
+
 from django.conf import settings
 from django.db import models
+
+OVERDUE_RATE_MARKUP = Decimal('3')
+LEGAL_MAX_INTEREST_RATE = Decimal('20')
 
 
 class LoanApplication(models.Model):
@@ -58,3 +63,13 @@ class Loan(models.Model):
     @property
     def borrower(self):
         return self.application.user
+
+    @property
+    def effective_interest_rate(self):
+        """연체 상태(OVERDUE_1/OVERDUE_2/DEFAULT)면 약정금리에 연체가산금리(최대 3%p)를 더한다.
+
+        법정 최고금리(20%, 이자제한법/대부업법 시행령)를 초과할 수 없다.
+        """
+        if self.status in (self.Status.OVERDUE_1, self.Status.OVERDUE_2, self.Status.DEFAULT):
+            return min(self.interest_rate + OVERDUE_RATE_MARKUP, LEGAL_MAX_INTEREST_RATE)
+        return self.interest_rate
