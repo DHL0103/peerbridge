@@ -5,7 +5,7 @@ from django.test import TestCase
 from rest_framework import status
 from rest_framework.test import APITestCase
 
-from accounts.models import User
+from accounts.models import PLATFORM_USERNAME, User
 from investments.models import Investment
 from ledger.models import Ledger
 from loans import services
@@ -493,3 +493,97 @@ class MarkOverdueLoansServiceTests(TestCase):
         self.assertEqual(updated, [])
         loan.refresh_from_db()
         self.assertEqual(loan.status, Loan.Status.DEFAULT)
+
+
+ADMIN_STATS_URL = '/api/loans/admin/stats/'
+ADMIN_RUN_EXPIRE_URL = '/api/loans/admin/run-expire-loans/'
+ADMIN_RUN_OVERDUE_URL = '/api/loans/admin/run-mark-overdue/'
+
+
+class AdminStatsAPITests(APITestCase):
+    """GET /api/loans/admin/stats/ 관리자 통계 조회 API 테스트."""
+
+    def setUp(self):
+        self.admin = User.objects.create_user(
+            username='admin1', email='admin1@example.com', password='S7rongPass!2024', is_staff=True,
+        )
+        self.user = User.objects.create_user(username='plain', email='plain@example.com', password='S7rongPass!2024')
+        self.borrower = User.objects.create_user(username='borrower_st', email='borrower_st@example.com', password='S7rongPass!2024')
+        User.objects.get_or_create(username=PLATFORM_USERNAME, defaults={'email': 'platform@example.com'})
+
+    def _create_application(self, loan_status=None):
+        application = LoanApplication.objects.create(
+            user=self.borrower, amount=Decimal('100000'), purpose='P', term_months=6,
+            status=LoanApplication.Status.APPROVED if loan_status else LoanApplication.Status.PENDING,
+        )
+        if loan_status:
+            Loan.objects.create(
+                application=application, interest_rate=Decimal('12.00'), investor_rate=Decimal('10.00'),
+                target_amount=Decimal('100000'), term_months=6, funding_deadline='2026-12-01', status=loan_status,
+            )
+        return application
+
+    def test_admin_can_view_stats(self):
+        self._create_application()  # PENDING 신청서
+        self._create_application(Loan.Status.FUNDRAISING)
+        self._create_application(Loan.Status.ACTIVE)
+        self._create_application(Loan.Status.OVERDUE_1)
+        self._create_application(Loan.Status.OVERDUE_2)
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.get(ADMIN_STATS_URL)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data['total_users'], 3)  # platform 계정 제외, admin+plain+borrower_st
+        self.assertEqual(response.data['pending_applications'], 1)
+        self.assertEqual(response.data['loans_by_status']['FUNDRAISING'], 1)
+        self.assertEqual(response.data['loans_by_status']['ACTIVE'], 1)
+        self.assertEqual(response.data['overdue_count'], 2)
+        self.assertIn('platform_balance', response.data)
+
+    def test_non_admin_returns_403(self):
+        self.client.force_authenticate(user=self.user)
+
+        response = self.client.get(ADMIN_STATS_URL)
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_without_authentication_returns_401(self):
+        response = self.client.get(ADMIN_STATS_URL)
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+
+class AdminManualBatchAPITests(APITestCase):
+    """관리자용 수동 배치 트리거 API 테스트 (기존 cron 서비스 함수 재사용)."""
+
+    def setUp(self):
+        self.admin = User.objects.create_user(
+            username='admin2', email='admin2@example.com', password='S7rongPass!2024', is_staff=True,
+        )
+        self.user = User.objects.create_user(username='plain2', email='plain2@example.com', password='S7rongPass!2024')
+
+    def test_admin_can_run_expire_loans(self):
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.post(ADMIN_RUN_EXPIRE_URL)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn('cancelled_count', response.data)
+
+    def test_admin_can_run_mark_overdue(self):
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.post(ADMIN_RUN_OVERDUE_URL)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertIn('updated_count', response.data)
+
+    def test_non_admin_cannot_run_batches(self):
+        self.client.force_authenticate(user=self.user)
+
+        expire_response = self.client.post(ADMIN_RUN_EXPIRE_URL)
+        overdue_response = self.client.post(ADMIN_RUN_OVERDUE_URL)
+
+        self.assertEqual(expire_response.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(overdue_response.status_code, status.HTTP_403_FORBIDDEN)

@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from django.db import transaction
 from django.shortcuts import get_object_or_404
 from rest_framework import generics, status
@@ -5,6 +7,8 @@ from rest_framework.permissions import AllowAny, IsAdminUser
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from accounts.models import PLATFORM_USERNAME, User
+from loans import services
 from loans.models import Loan, LoanApplication
 from loans.serializers import LoanApplicationApproveSerializer, LoanApplicationSerializer, LoanSerializer
 
@@ -91,3 +95,46 @@ class LoanDetailView(generics.RetrieveAPIView):
     permission_classes = [AllowAny]
     queryset = Loan.objects.all()
     serializer_class = LoanSerializer
+
+
+class AdminStatsView(APIView):
+    """GET /api/loans/admin/stats/ 관리자용 플랫폼 통계 요약."""
+
+    permission_classes = [IsAdminUser]
+
+    def get(self, request):
+        loans_by_status = {
+            choice: Loan.objects.filter(status=choice).count() for choice, _ in Loan.Status.choices
+        }
+        overdue_count = sum(
+            loans_by_status[s] for s in (Loan.Status.OVERDUE_1, Loan.Status.OVERDUE_2, Loan.Status.DEFAULT)
+        )
+        platform = User.objects.filter(username=PLATFORM_USERNAME).first()
+
+        return Response({
+            'total_users': User.objects.exclude(username=PLATFORM_USERNAME).count(),
+            'pending_applications': LoanApplication.objects.filter(status=LoanApplication.Status.PENDING).count(),
+            'loans_by_status': loans_by_status,
+            'overdue_count': overdue_count,
+            'platform_balance': platform.balance if platform else Decimal('0'),
+        })
+
+
+class AdminRunExpireLoansView(APIView):
+    """POST /api/loans/admin/run-expire-loans/ 마감일 지난 대출 취소 배치를 수동 실행 (cron과 동일 로직)."""
+
+    permission_classes = [IsAdminUser]
+
+    def post(self, request):
+        cancelled = services.expire_fundraising_loans()
+        return Response({'cancelled_count': len(cancelled)})
+
+
+class AdminRunMarkOverdueView(APIView):
+    """POST /api/loans/admin/run-mark-overdue/ 연체 자동 승급 배치를 수동 실행 (cron과 동일 로직)."""
+
+    permission_classes = [IsAdminUser]
+
+    def post(self, request):
+        updated = services.mark_overdue_loans()
+        return Response({'updated_count': len(updated)})

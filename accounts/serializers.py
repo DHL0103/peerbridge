@@ -71,6 +71,15 @@ class ProfileSerializer(serializers.ModelSerializer):
         read_only_fields = fields
 
 
+class AdminUserSerializer(serializers.ModelSerializer):
+    """관리자용 회원 목록/상세 조회 시리얼라이저 (전 필드 read-only, is_active만 토글 API로 변경)."""
+
+    class Meta:
+        model = User
+        fields = ['id', 'username', 'email', 'first_name', 'phone_number', 'balance', 'is_staff', 'is_active', 'created_at']
+        read_only_fields = fields
+
+
 class BankAccountSerializer(serializers.ModelSerializer):
     """계좌 목록 조회/등록 시리얼라이저. 사용자의 첫 계좌는 자동으로 기본계좌가 된다."""
 
