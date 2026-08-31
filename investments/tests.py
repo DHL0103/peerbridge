@@ -320,6 +320,8 @@ class MonthlyReturnsAPITests(APITestCase):
 
     def setUp(self):
         self.investor = User.objects.create_user(username='investor', email='investor@example.com', password='S7rongPass!2024')
+        self.investor.balance = Decimal('1000000.00')
+        self.investor.save()
         self.borrower = User.objects.create_user(username='borrower', email='borrower@example.com', password='S7rongPass!2024')
         self.borrower.balance = Decimal('1000000.00')
         self.borrower.save()
