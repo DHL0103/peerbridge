@@ -6,7 +6,7 @@ from rest_framework import status
 from rest_framework.test import APIClient, APITestCase
 from rest_framework_simplejwt.tokens import RefreshToken
 
-from accounts.models import BankAccount, User
+from accounts.models import PLATFORM_USERNAME, BankAccount, User
 
 REGISTER_URL = '/api/auth/register/'
 LOGIN_URL = '/api/auth/login/'
@@ -624,3 +624,84 @@ class BankAccountRaceConditionAPITests(TransactionTestCase):
         self.assertTrue(all(r.status_code == status.HTTP_201_CREATED for r in responses))
         primary_count = BankAccount.objects.filter(user=self.user, is_primary=True).count()
         self.assertEqual(primary_count, 1)
+
+
+ADMIN_USERS_URL = '/api/auth/admin/users/'
+
+
+def toggle_active_url(pk):
+    return f'/api/auth/admin/users/{pk}/toggle-active/'
+
+
+class AdminUserListAPITests(APITestCase):
+    """GET /api/auth/admin/users/ 관리자용 회원 목록 조회 API 테스트."""
+
+    def setUp(self):
+        self.admin = User.objects.create_user(
+            username='admin_ul', email='admin_ul@example.com', password='S7rongPass!2024', is_staff=True,
+        )
+        self.member = User.objects.create_user(username='member_ul', email='member_ul@example.com', password='S7rongPass!2024')
+        User.objects.get_or_create(username=PLATFORM_USERNAME, defaults={'email': 'platform_ul@example.com'})
+
+    def test_admin_sees_all_users_excluding_platform_account(self):
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.get(ADMIN_USERS_URL)
+
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        usernames = [u['username'] for u in response.data['results']]
+        self.assertIn('admin_ul', usernames)
+        self.assertIn('member_ul', usernames)
+        self.assertNotIn(PLATFORM_USERNAME, usernames)
+
+    def test_non_admin_returns_403(self):
+        self.client.force_authenticate(user=self.member)
+
+        response = self.client.get(ADMIN_USERS_URL)
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_without_authentication_returns_401(self):
+        response = self.client.get(ADMIN_USERS_URL)
+
+        self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+
+class AdminUserToggleActiveAPITests(APITestCase):
+    """POST /api/auth/admin/users/{id}/toggle-active/ 회원 활성/비활성 토글 API 테스트."""
+
+    def setUp(self):
+        self.admin = User.objects.create_user(
+            username='admin_ta', email='admin_ta@example.com', password='S7rongPass!2024', is_staff=True,
+        )
+        self.member = User.objects.create_user(username='member_ta', email='member_ta@example.com', password='S7rongPass!2024')
+        self.platform, _ = User.objects.get_or_create(username=PLATFORM_USERNAME, defaults={'email': 'platform_ta@example.com'})
+
+    def test_admin_can_deactivate_and_reactivate_member(self):
+        self.client.force_authenticate(user=self.admin)
+
+        first = self.client.post(toggle_active_url(self.member.id))
+        self.member.refresh_from_db()
+        self.assertEqual(first.status_code, status.HTTP_200_OK)
+        self.assertFalse(self.member.is_active)
+
+        second = self.client.post(toggle_active_url(self.member.id))
+        self.member.refresh_from_db()
+        self.assertEqual(second.status_code, status.HTTP_200_OK)
+        self.assertTrue(self.member.is_active)
+
+    def test_cannot_toggle_platform_account(self):
+        self.client.force_authenticate(user=self.admin)
+
+        response = self.client.post(toggle_active_url(self.platform.id))
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        self.platform.refresh_from_db()
+        self.assertTrue(self.platform.is_active)
+
+    def test_non_admin_returns_403(self):
+        self.client.force_authenticate(user=self.member)
+
+        response = self.client.post(toggle_active_url(self.admin.id))
+
+        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
