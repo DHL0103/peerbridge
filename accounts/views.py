@@ -1,12 +1,14 @@
 from django.db import transaction
 from django.shortcuts import get_object_or_404
 from rest_framework import generics, status
-from rest_framework.permissions import AllowAny
+from rest_framework.permissions import AllowAny, IsAdminUser
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from accounts.models import BankAccount
-from accounts.serializers import BankAccountSerializer, PasswordChangeSerializer, ProfileSerializer, RegisterSerializer
+from accounts.models import PLATFORM_USERNAME, BankAccount, User
+from accounts.serializers import (
+    AdminUserSerializer, BankAccountSerializer, PasswordChangeSerializer, ProfileSerializer, RegisterSerializer,
+)
 
 
 class RegisterView(generics.CreateAPIView):
@@ -59,3 +61,26 @@ class BankAccountSetPrimaryView(APIView):
             account.save(update_fields=['is_primary'])
 
         return Response(BankAccountSerializer(account).data, status=status.HTTP_200_OK)
+
+
+class AdminUserListView(generics.ListAPIView):
+    """GET /api/auth/admin/users/ 관리자용 전체 회원 목록 조회 API. 플랫폼 시스템 계정은 제외."""
+
+    permission_classes = [IsAdminUser]
+    serializer_class = AdminUserSerializer
+    queryset = User.objects.exclude(username=PLATFORM_USERNAME).order_by('-created_at')
+
+
+class AdminUserToggleActiveView(APIView):
+    """POST /api/auth/admin/users/{id}/toggle-active/ 회원 활성/비활성 토글 API."""
+
+    permission_classes = [IsAdminUser]
+
+    def post(self, request, pk):
+        user = get_object_or_404(User, pk=pk)
+        if user.username == PLATFORM_USERNAME:
+            return Response({'detail': '플랫폼 시스템 계정은 비활성화할 수 없습니다.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        user.is_active = not user.is_active
+        user.save(update_fields=['is_active'])
+        return Response(AdminUserSerializer(user).data)

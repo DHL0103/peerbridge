@@ -692,12 +692,13 @@ class AdminUserToggleActiveAPITests(APITestCase):
 
     def test_cannot_toggle_platform_account(self):
         self.client.force_authenticate(user=self.admin)
+        is_active_before = self.platform.is_active
 
         response = self.client.post(toggle_active_url(self.platform.id))
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.platform.refresh_from_db()
-        self.assertTrue(self.platform.is_active)
+        self.assertEqual(self.platform.is_active, is_active_before)
 
     def test_non_admin_returns_403(self):
         self.client.force_authenticate(user=self.member)
