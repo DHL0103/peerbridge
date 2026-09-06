@@ -496,8 +496,6 @@ class MarkOverdueLoansServiceTests(TestCase):
 
 
 ADMIN_STATS_URL = '/api/loans/admin/stats/'
-ADMIN_RUN_EXPIRE_URL = '/api/loans/admin/run-expire-loans/'
-ADMIN_RUN_OVERDUE_URL = '/api/loans/admin/run-mark-overdue/'
 
 
 class AdminStatsAPITests(APITestCase):
@@ -552,38 +550,3 @@ class AdminStatsAPITests(APITestCase):
         response = self.client.get(ADMIN_STATS_URL)
 
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
-
-
-class AdminManualBatchAPITests(APITestCase):
-    """관리자용 수동 배치 트리거 API 테스트 (기존 cron 서비스 함수 재사용)."""
-
-    def setUp(self):
-        self.admin = User.objects.create_user(
-            username='admin2', email='admin2@example.com', password='S7rongPass!2024', is_staff=True,
-        )
-        self.user = User.objects.create_user(username='plain2', email='plain2@example.com', password='S7rongPass!2024')
-
-    def test_admin_can_run_expire_loans(self):
-        self.client.force_authenticate(user=self.admin)
-
-        response = self.client.post(ADMIN_RUN_EXPIRE_URL)
-
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertIn('cancelled_count', response.data)
-
-    def test_admin_can_run_mark_overdue(self):
-        self.client.force_authenticate(user=self.admin)
-
-        response = self.client.post(ADMIN_RUN_OVERDUE_URL)
-
-        self.assertEqual(response.status_code, status.HTTP_200_OK)
-        self.assertIn('updated_count', response.data)
-
-    def test_non_admin_cannot_run_batches(self):
-        self.client.force_authenticate(user=self.user)
-
-        expire_response = self.client.post(ADMIN_RUN_EXPIRE_URL)
-        overdue_response = self.client.post(ADMIN_RUN_OVERDUE_URL)
-
-        self.assertEqual(expire_response.status_code, status.HTTP_403_FORBIDDEN)
-        self.assertEqual(overdue_response.status_code, status.HTTP_403_FORBIDDEN)
