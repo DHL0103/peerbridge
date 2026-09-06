@@ -3,7 +3,6 @@ from rest_framework_simplejwt.views import TokenBlacklistView, TokenObtainPairVi
 
 from accounts.views import (
     AdminUserListView,
-    AdminUserToggleActiveView,
     BankAccountListCreateView,
     BankAccountSetPrimaryView,
     PasswordChangeView,
@@ -20,5 +19,4 @@ urlpatterns = [
     path('bank-accounts/', BankAccountListCreateView.as_view(), name='bank-account-list-create'),
     path('bank-accounts/<int:pk>/set-primary/', BankAccountSetPrimaryView.as_view(), name='bank-account-set-primary'),
     path('admin/users/', AdminUserListView.as_view(), name='admin-user-list'),
-    path('admin/users/<int:pk>/toggle-active/', AdminUserToggleActiveView.as_view(), name='admin-user-toggle-active'),
 ]

@@ -69,18 +69,3 @@ class AdminUserListView(generics.ListAPIView):
     permission_classes = [IsAdminUser]
     serializer_class = AdminUserSerializer
     queryset = User.objects.exclude(username=PLATFORM_USERNAME).order_by('-created_at')
-
-
-class AdminUserToggleActiveView(APIView):
-    """POST /api/auth/admin/users/{id}/toggle-active/ 회원 활성/비활성 토글 API."""
-
-    permission_classes = [IsAdminUser]
-
-    def post(self, request, pk):
-        user = get_object_or_404(User, pk=pk)
-        if user.username == PLATFORM_USERNAME:
-            return Response({'detail': '플랫폼 시스템 계정은 비활성화할 수 없습니다.'}, status=status.HTTP_400_BAD_REQUEST)
-
-        user.is_active = not user.is_active
-        user.save(update_fields=['is_active'])
-        return Response(AdminUserSerializer(user).data)

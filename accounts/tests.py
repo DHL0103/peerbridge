@@ -629,10 +629,6 @@ class BankAccountRaceConditionAPITests(TransactionTestCase):
 ADMIN_USERS_URL = '/api/auth/admin/users/'
 
 
-def toggle_active_url(pk):
-    return f'/api/auth/admin/users/{pk}/toggle-active/'
-
-
 class AdminUserListAPITests(APITestCase):
     """GET /api/auth/admin/users/ 관리자용 회원 목록 조회 API 테스트."""
 
@@ -665,44 +661,3 @@ class AdminUserListAPITests(APITestCase):
         response = self.client.get(ADMIN_USERS_URL)
 
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
-
-
-class AdminUserToggleActiveAPITests(APITestCase):
-    """POST /api/auth/admin/users/{id}/toggle-active/ 회원 활성/비활성 토글 API 테스트."""
-
-    def setUp(self):
-        self.admin = User.objects.create_user(
-            username='admin_ta', email='admin_ta@example.com', password='S7rongPass!2024', is_staff=True,
-        )
-        self.member = User.objects.create_user(username='member_ta', email='member_ta@example.com', password='S7rongPass!2024')
-        self.platform, _ = User.objects.get_or_create(username=PLATFORM_USERNAME, defaults={'email': 'platform_ta@example.com'})
-
-    def test_admin_can_deactivate_and_reactivate_member(self):
-        self.client.force_authenticate(user=self.admin)
-
-        first = self.client.post(toggle_active_url(self.member.id))
-        self.member.refresh_from_db()
-        self.assertEqual(first.status_code, status.HTTP_200_OK)
-        self.assertFalse(self.member.is_active)
-
-        second = self.client.post(toggle_active_url(self.member.id))
-        self.member.refresh_from_db()
-        self.assertEqual(second.status_code, status.HTTP_200_OK)
-        self.assertTrue(self.member.is_active)
-
-    def test_cannot_toggle_platform_account(self):
-        self.client.force_authenticate(user=self.admin)
-        is_active_before = self.platform.is_active
-
-        response = self.client.post(toggle_active_url(self.platform.id))
-
-        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
-        self.platform.refresh_from_db()
-        self.assertEqual(self.platform.is_active, is_active_before)
-
-    def test_non_admin_returns_403(self):
-        self.client.force_authenticate(user=self.member)
-
-        response = self.client.post(toggle_active_url(self.admin.id))
-
-        self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
