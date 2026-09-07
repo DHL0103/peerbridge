@@ -18,7 +18,7 @@ from dotenv import load_dotenv
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 load_dotenv()
-load_dotenv(BASE_DIR / '.env.docker')
+load_dotenv(BASE_DIR / '.env.prod')
 
 
 # Quick-start development settings - unsuitable for production
