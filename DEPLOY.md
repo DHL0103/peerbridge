@@ -28,10 +28,24 @@ cd ~/apps/peerbridge-admin && npm ci && npm run build         # -> dist/
 
 ## 2. 백엔드 환경변수
 
+설정값이 두 파일로 나뉜다.
+
+**`.env.production`** — `docker-compose.prod.yml` 자체가 쓰는 값 (db 컨테이너 설정, ECR
+이미지 태그). 서버에 직접 두는 파일이다.
+
 ```bash
 cd ~/apps/peerbridge
 cp .env.production.example .env.production
-# SECRET_KEY, ALLOWED_HOSTS(VPS 공인 IP), DB_PASSWORD 등을 채운다.
+# DB_PASSWORD, ECR_IMAGE 등을 채운다.
+```
+
+**`.env.docker`** — Django 앱 자체의 설정(SECRET_KEY 등). CI/CD를 쓰면 GitHub Secret
+(`ENV_DOCKER`)에서 빌드 시점에 자동 생성되므로 서버에 직접 만들 필요가 없다. CI 없이
+로컬에서 수동으로 처음 띄워볼 때만 아래처럼 직접 만든다:
+
+```bash
+cp .env.docker.example .env.docker
+# SECRET_KEY, ALLOWED_HOSTS(VPS 공인 IP), DB_PASSWORD(= .env.production과 동일값) 등을 채운다.
 # SECRET_KEY 생성:
 python3 -c "from django.core.management.utils import get_random_secret_key; print(get_random_secret_key())"
 ```
@@ -53,8 +67,10 @@ docker compose --env-file .env.production -f docker-compose.prod.yml up -d --bui
 ## CI/CD (자동배포)
 
 `.github/workflows/deploy.yml` — `main`에 머지/푸시되면 자동으로:
-1. Docker 이미지를 빌드해 ECR에 푸시 (`:latest` + 커밋 sha 태그)
-2. EC2에 SSH로 접속해 `docker compose pull web && up -d web` 실행 (마이그레이션은
+1. GitHub Secret `ENV_DOCKER`로 `.env.docker` 파일을 만든다
+2. Docker 이미지를 빌드(이때 `.env.docker`가 이미지 안에 그대로 포함됨)해 ECR에 푸시
+   (`:latest` + 커밋 sha 태그)
+3. EC2에 SSH로 접속해 `docker compose pull web && up -d web` 실행 (마이그레이션은
    `web` 컨테이너 기동 커맨드에 이미 포함돼있어 자동 적용됨)
 
 ### 최초 1회, AWS 콘솔/CLI에서 준비할 것
@@ -86,12 +102,19 @@ docker compose --env-file .env.production -f docker-compose.prod.yml up -d --bui
 | `EC2_HOST` | VPS 공인 IP 또는 도메인 |
 | `EC2_USER` | SSH 접속 계정 (예: ubuntu) |
 | `EC2_SSH_KEY` | EC2 접속용 SSH 프라이빗 키 (PEM 파일 내용 그대로) |
+| `ENV_DOCKER` | `.env.docker.example`을 채운 내용 전체를 그대로 붙여넣기 (SECRET_KEY 등, 이미지에 구워짐) |
 
-### `.env.production`에 추가로 채울 값
+### 서버의 `.env.production`에 추가로 채울 값
 ```
 ECR_IMAGE=<AWS계정ID>.dkr.ecr.ap-northeast-2.amazonaws.com/peerbridge:latest
 ```
 `docker-compose.prod.yml`의 `web` 서비스가 이 값을 보고 어떤 이미지를 pull할지 정한다.
+
+### 주의: DB_PASSWORD는 두 곳에 따로 존재한다
+- `.env.production`(서버) — `db` 컨테이너 자체의 root 비밀번호로 씀
+- `ENV_DOCKER`(GitHub Secret, 이미지에 구워짐) — Django가 DB 접속할 때 쓰는 비밀번호
+
+같은 값이어야 접속이 되고, 비밀번호를 바꿀 땐 두 곳 다 바꿔야 한다(하나만 바꾸면 접속 실패).
 
 ## 5. DB 접근 (운영 중 조회/디버깅)
 
@@ -106,7 +129,8 @@ ssh -L 3306:localhost:3306 user@<VPS_IP>
 
 1. `nginx/prod.conf`를 서브도메인 기반(`server_name`)으로 교체하고 443 + 인증서 설정 추가
    (Let's Encrypt certbot 컨테이너 또는 host certbot으로 발급)
-2. `.env.production`의 `ALLOWED_HOSTS`를 IP에서 도메인으로 교체
+2. `ENV_DOCKER`(GitHub Secret, 로컬 수동 배포라면 `.env.docker`)의 `ALLOWED_HOSTS`를
+   IP에서 도메인으로 교체 후 재배포
 3. `settings.py`에 `SECURE_SSL_REDIRECT=True`, `SESSION_COOKIE_SECURE=True`,
    `CSRF_COOKIE_SECURE=True`, `SECURE_HSTS_SECONDS` 등 HTTPS 전용 보안 설정 추가
    (`python manage.py check --deploy`로 남은 경고 확인)
