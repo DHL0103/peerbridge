@@ -1,7 +1,7 @@
 from datetime import datetime
 from decimal import ROUND_HALF_UP, Decimal
 
-from django.db.models import Count, Sum
+from django.db.models import Count, Q, Sum
 from django.db.models.functions import TruncMonth
 from django.utils import timezone
 from rest_framework import status
@@ -60,9 +60,11 @@ class MyInvestmentListView(APIView):
             for row in RepaymentSchedule.objects.filter(loan_id__in=loan_ids, status=RepaymentSchedule.Status.PAID)
                 .values('loan_id').annotate(paid=Count('id'))
         }
+        # "다음 정산 예정"은 아직 안 낸 회차뿐 아니라, 정산일 전에 미리 냈지만 아직
+        # 투자자에게 분배는 안 된 회차도 포함해야 한다 (분배는 정산일에 이뤄지므로).
         next_schedules = {}
-        for schedule in RepaymentSchedule.objects.filter(
-            loan_id__in=loan_ids, status=RepaymentSchedule.Status.PENDING,
+        for schedule in RepaymentSchedule.objects.filter(loan_id__in=loan_ids).filter(
+            Q(repayment__isnull=True) | Q(repayment__distributed_at__isnull=True),
         ).order_by('loan_id', 'due_date'):
             next_schedules.setdefault(schedule.loan_id, schedule)
 

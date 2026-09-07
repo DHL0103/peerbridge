@@ -10,7 +10,7 @@ from investments.services import create_investment
 from ledger.models import Ledger
 from loans.models import Loan, LoanApplication
 from repayments.models import Distribution, Repayment, RepaymentSchedule
-from repayments.services import generate_schedule
+from repayments.services import distribute_due_repayments, generate_schedule
 
 
 def _repay_url(loan_id):
@@ -108,6 +108,25 @@ class ScheduleGenerationTests(APITestCase):
 
         self.assertEqual(RepaymentSchedule.objects.filter(loan=loan).count(), 12)
 
+    def test_schedule_amounts_have_no_fractional_won(self):
+        """원화는 소숫점 단위가 없다 — 나눗셈이 안 떨어져도 회차별 금액은 항상 원 단위여야 한다."""
+        loan = self._create_loan(target_amount=Decimal('10000000.00'), term_months=12, interest_rate=Decimal('12.34'))
+        self.investor_a.balance = Decimal('10000000.00')
+        self.investor_a.save()
+
+        self._fund_to_target_amount(loan, Decimal('10000000.00'))
+
+        schedules = RepaymentSchedule.objects.filter(loan=loan)
+        for schedule in schedules:
+            self.assertEqual(schedule.principal % 1, Decimal('0'), f'{schedule.installment_number}회차 원금에 소숫점이 있음')
+            self.assertEqual(schedule.interest % 1, Decimal('0'), f'{schedule.installment_number}회차 이자에 소숫점이 있음')
+            self.assertEqual(schedule.total_amount % 1, Decimal('0'), f'{schedule.installment_number}회차 합계에 소숫점이 있음')
+        self.assertEqual(sum((s.principal for s in schedules), Decimal('0')), Decimal('10000000.00'))
+
+    def _fund_to_target_amount(self, loan, target_amount):
+        create_investment(loan_id=loan.id, investor=self.investor_a, amount=target_amount, idempotency_key='fund-solo')
+        loan.refresh_from_db()
+
 
 class RepaymentAPITests(APITestCase):
     """POST /api/loans/{id}/repay/ 상환 납부 API 테스트 (REQ-015~026)."""
@@ -148,6 +167,15 @@ class RepaymentAPITests(APITestCase):
         create_investment(loan_id=loan.id, investor=self.investor_a, amount=target_amount, idempotency_key='fund-solo')
         loan.refresh_from_db()
         return loan
+
+    def _make_next_schedule_due_today(self, loan):
+        """정산일이 오늘인 것처럼 만들어 즉시분배 케이스를 재현한다 (스케줄은 항상 오늘+1개월로 생성되므로)."""
+        schedule = RepaymentSchedule.objects.filter(
+            loan=loan, status=RepaymentSchedule.Status.PENDING,
+        ).order_by('installment_number').first()
+        schedule.due_date = date.today()
+        schedule.save(update_fields=['due_date'])
+        return schedule
 
     # REQ-015
     def test_repay_happy_path_deducts_balance_and_marks_schedule_paid(self):
@@ -196,6 +224,7 @@ class RepaymentAPITests(APITestCase):
     # REQ-017
     def test_repay_distributes_to_investors_rounded_up_to_whole_won(self):
         loan = self._create_active_loan_three_way()
+        self._make_next_schedule_due_today(loan)
         self.client.force_authenticate(user=self.borrower)
 
         response = self.client.post(_repay_url(loan.id), {'idempotency_key': 'repay-1'}, format='json')
@@ -229,6 +258,7 @@ class RepaymentAPITests(APITestCase):
     # REQ-017
     def test_repay_credits_platform_account_with_spread_minus_rounding_up_cost(self):
         loan = self._create_active_loan_three_way()
+        self._make_next_schedule_due_today(loan)
         self.client.force_authenticate(user=self.borrower)
 
         self.client.post(_repay_url(loan.id), {'idempotency_key': 'repay-1'}, format='json')
@@ -244,6 +274,7 @@ class RepaymentAPITests(APITestCase):
     # REQ-018
     def test_repay_duplicate_idempotency_key_does_not_double_deduct_or_distribute(self):
         loan = self._create_active_loan_three_way()
+        self._make_next_schedule_due_today(loan)
         self.client.force_authenticate(user=self.borrower)
 
         first = self.client.post(_repay_url(loan.id), {'idempotency_key': 'shared-key'}, format='json')
@@ -381,6 +412,106 @@ class RepaymentAPITests(APITestCase):
         response = self.client.post(_repay_url(loan.id), {}, format='json')
 
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
+
+class DeferredDistributionTests(APITestCase):
+    """상환(납부)과 투자자 분배(정산)의 시점을 분리하는 로직 테스트.
+
+    정산일(schedule.due_date) 전에 미리 상환하면 분배는 정산일까지 보류되고,
+    distribute_due_repayments() 배치가 정산일이 된 건들을 그때 처리한다.
+    """
+
+    def setUp(self):
+        self.borrower = User.objects.create_user(username='borrower_dd', email='borrower_dd@example.com', password='S7rongPass!2024')
+        self.borrower.balance = Decimal('1000000.00')
+        self.borrower.save()
+        self.investor = User.objects.create_user(username='investor_dd', email='investor_dd@example.com', password='S7rongPass!2024')
+        self.investor.balance = Decimal('1000000.00')
+        self.investor.save()
+
+    def _create_active_loan(self, target_amount=Decimal('300000.00'), term_months=12):
+        application = LoanApplication.objects.create(
+            user=self.borrower, amount=target_amount, purpose='사업자금', term_months=term_months,
+            status=LoanApplication.Status.APPROVED,
+        )
+        loan = Loan.objects.create(
+            application=application, interest_rate=Decimal('12.00'), investor_rate=Decimal('10.00'),
+            target_amount=target_amount, funded_amount=Decimal('0'), term_months=term_months,
+            funding_deadline='2026-12-01', status=Loan.Status.FUNDRAISING,
+        )
+        create_investment(loan_id=loan.id, investor=self.investor, amount=target_amount, idempotency_key='fund-dd')
+        loan.refresh_from_db()
+        return loan
+
+    def test_repay_before_due_date_defers_distribution(self):
+        loan = self._create_active_loan()
+        self.client.force_authenticate(user=self.borrower)
+
+        response = self.client.post(_repay_url(loan.id), {'idempotency_key': 'early-1'}, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        schedule1 = RepaymentSchedule.objects.get(loan=loan, installment_number=1)
+        self.assertEqual(schedule1.status, RepaymentSchedule.Status.PAID)  # 납부는 즉시 반영
+        repayment = Repayment.objects.get(idempotency_key='early-1')
+        self.assertIsNone(repayment.distributed_at)
+        self.assertEqual(Distribution.objects.count(), 0)
+        self.investor.refresh_from_db()
+        self.assertEqual(self.investor.balance, Decimal('700000.00'))  # 투자(30만원)만 차감, 분배는 아직
+
+    def test_repay_on_due_date_distributes_immediately(self):
+        loan = self._create_active_loan()
+        schedule1 = RepaymentSchedule.objects.get(loan=loan, installment_number=1)
+        schedule1.due_date = date.today()
+        schedule1.save(update_fields=['due_date'])
+        self.client.force_authenticate(user=self.borrower)
+
+        self.client.post(_repay_url(loan.id), {'idempotency_key': 'ontime-1'}, format='json')
+
+        repayment = Repayment.objects.get(idempotency_key='ontime-1')
+        self.assertIsNotNone(repayment.distributed_at)
+        self.assertEqual(Distribution.objects.count(), 1)
+
+    def test_distribute_due_repayments_settles_once_due_date_reached(self):
+        loan = self._create_active_loan()
+        self.client.force_authenticate(user=self.borrower)
+        self.client.post(_repay_url(loan.id), {'idempotency_key': 'early-2'}, format='json')
+        schedule1 = RepaymentSchedule.objects.get(loan=loan, installment_number=1)
+        schedule1.due_date = date.today()
+        schedule1.save(update_fields=['due_date'])
+
+        settled = distribute_due_repayments()
+
+        self.assertEqual(len(settled), 1)
+        repayment = Repayment.objects.get(idempotency_key='early-2')
+        repayment.refresh_from_db()
+        self.assertIsNotNone(repayment.distributed_at)
+        self.assertEqual(Distribution.objects.count(), 1)
+        self.investor.refresh_from_db()
+        # 투자(30만원) 차감 후 700,000 + 분배(원금 25,000 + 투자자 몫 이자 2,500) = 727,500.
+        self.assertEqual(self.investor.balance, Decimal('727500.00'))
+
+    def test_distribute_due_repayments_skips_not_yet_due(self):
+        loan = self._create_active_loan()
+        self.client.force_authenticate(user=self.borrower)
+        self.client.post(_repay_url(loan.id), {'idempotency_key': 'early-3'}, format='json')
+
+        settled = distribute_due_repayments()
+
+        self.assertEqual(settled, [])
+        self.assertEqual(Distribution.objects.count(), 0)
+
+    def test_distribute_due_repayments_does_not_double_distribute(self):
+        loan = self._create_active_loan()
+        schedule1 = RepaymentSchedule.objects.get(loan=loan, installment_number=1)
+        schedule1.due_date = date.today()
+        schedule1.save(update_fields=['due_date'])
+        self.client.force_authenticate(user=self.borrower)
+        self.client.post(_repay_url(loan.id), {'idempotency_key': 'ontime-2'}, format='json')  # 이미 즉시분배됨
+
+        settled = distribute_due_repayments()
+
+        self.assertEqual(settled, [])
+        self.assertEqual(Distribution.objects.count(), 1)
 
 
 NEXT_REPAYMENT_URL = '/api/loans/mine/next-repayment/'
