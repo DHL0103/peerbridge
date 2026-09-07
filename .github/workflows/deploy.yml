@@ -49,6 +49,7 @@ jobs:
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
             cd ~/apps/peerbridge
+            git pull origin main
             docker compose --env-file .env.production -f docker-compose.prod.yml pull web
             docker compose --env-file .env.production -f docker-compose.prod.yml up -d web
             docker image prune -f

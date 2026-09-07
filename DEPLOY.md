@@ -15,6 +15,13 @@ VPS에 Docker + Docker Compose, git, Node.js(프론트 빌드용)를 설치하�
   peerbridge-admin/     (관리자 프론트)
 ```
 
+`peerbridge`(백엔드)는 clone해두지만, 배포 자체는 이미지를 ECR에서 pull만 하는
+방식이라 Django 소스코드는 실제로 안 쓰인다 — clone하는 이유는 `docker-compose.prod.yml`,
+`nginx/prod.conf`처럼 **compose가 실행 시점에 로컬에서 읽어야 하는 설정 파일들**을
+git으로 최신 상태로 유지하기 위해서다(배포 스크립트가 매번 `git pull` 실행).
+그래서 EC2 자체가 이 저장소를 pull할 수 있어야 한다 — GitHub repo가 private이면
+EC2에 SSH 키를 만들어 GitHub repo Settings → Deploy keys에 등록(읽기 전용으로 충분).
+
 ## 1. 프론트 두 개 빌드
 
 각 프론트 저장소에 `.env.production` 파일을 만들고 `VITE_API_BASE_URL=`(빈 값)으로 둔다.
@@ -70,8 +77,9 @@ docker compose --env-file .env.production -f docker-compose.prod.yml up -d --bui
 1. GitHub Secret `ENV_DOCKER`로 `.env.docker` 파일을 만든다
 2. Docker 이미지를 빌드(이때 `.env.docker`가 이미지 안에 그대로 포함됨)해 ECR에 푸시
    (`:latest` + 커밋 sha 태그)
-3. EC2에 SSH로 접속해 `docker compose pull web && up -d web` 실행 (마이그레이션은
-   `web` 컨테이너 기동 커맨드에 이미 포함돼있어 자동 적용됨)
+3. EC2에 SSH로 접속해 `git pull`로 `docker-compose.prod.yml`/`nginx/prod.conf` 등을
+   최신화한 뒤 `docker compose pull web && up -d web` 실행 (마이그레이션은 `web`
+   컨테이너 기동 커맨드에 이미 포함돼있어 자동 적용됨)
 
 ### 최초 1회, AWS 콘솔/CLI에서 준비할 것
 - ECR 리포지토리 생성: `aws ecr create-repository --repository-name peerbridge --region ap-northeast-2`
