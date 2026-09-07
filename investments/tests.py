@@ -1,3 +1,4 @@
+from datetime import date
 from decimal import Decimal
 
 from django.db.models import Sum
@@ -269,6 +270,9 @@ class MyInvestmentListAPITests(APITestCase):
         create_investment(loan_id=loan.id, investor=self.investor, amount=Decimal('100000.00'), idempotency_key='inv-1')
         create_investment(loan_id=loan.id, investor=self.other_investor, amount=Decimal('100000.00'), idempotency_key='inv-2')
         create_investment(loan_id=loan.id, investor=self.other_investor, amount=Decimal('100000.00'), idempotency_key='inv-3')
+        schedule1 = loan.repayment_schedules.get(installment_number=1)
+        schedule1.due_date = date.today()
+        schedule1.save(update_fields=['due_date'])
         repay(loan_id=loan.id, borrower=self.borrower, idempotency_key='repay-1')
         self.client.force_authenticate(user=self.investor)
 
@@ -287,9 +291,32 @@ class MyInvestmentListAPITests(APITestCase):
         # 2회차 예상 분배금(원금 25,000 + 투자자 몫 이자 2,291.67)의 1/3 지분, 반올림.
         self.assertEqual(item['estimated_next_amount'], '9097')
 
+    def test_early_repayment_keeps_same_installment_as_next_until_settled(self):
+        """정산일 전에 미리 상환하면, 그 회차는 '완납'이어도 분배 전까지 계속 '다음 정산 예정'으로 보여야 한다."""
+        loan = self._create_loan(target_amount=Decimal('300000.00'))
+        create_investment(loan_id=loan.id, investor=self.investor, amount=Decimal('100000.00'), idempotency_key='early-inv-1')
+        create_investment(loan_id=loan.id, investor=self.other_investor, amount=Decimal('200000.00'), idempotency_key='early-inv-2')
+        repay(loan_id=loan.id, borrower=self.borrower, idempotency_key='early-repay-1')  # 정산일 전 조기상환
+        self.client.force_authenticate(user=self.investor)
+
+        response = self.client.get(MINE_URL)
+
+        item = response.data['results'][0]
+        self.assertEqual(item['earned'], '0')  # 아직 분배 안 됨
+        loan.refresh_from_db()
+        schedule1 = loan.repayment_schedules.get(installment_number=1)
+        self.assertEqual(item['next_due_date'], str(schedule1.due_date))  # 여전히 1회차가 다음 정산
+
     def test_completed_loan_has_no_next_estimate(self):
         loan = self._create_loan(target_amount=Decimal('200000.00'), term_months=2)
         create_investment(loan_id=loan.id, investor=self.investor, amount=Decimal('200000.00'), idempotency_key='solo-1')
+        # 두 회차 모두 정산일을 오늘로 당겨서, 완납과 동시에 분배까지 끝나게 한다
+        # (그래야 "완료된 대출엔 다음 정산 예정이 없다"는 이 테스트의 취지가 유지됨 —
+        # 분배가 밀려있으면 대출이 COMPLETED여도 다음 정산 예정은 남아있을 수 있음).
+        for n in (1, 2):
+            s = loan.repayment_schedules.get(installment_number=n)
+            s.due_date = date.today()
+            s.save(update_fields=['due_date'])
         repay(loan_id=loan.id, borrower=self.borrower, idempotency_key='final-1')
         repay(loan_id=loan.id, borrower=self.borrower, idempotency_key='final-2')
         self.client.force_authenticate(user=self.investor)
@@ -342,6 +369,9 @@ class MonthlyReturnsAPITests(APITestCase):
             funding_deadline='2026-12-01', status=Loan.Status.FUNDRAISING,
         )
         create_investment(loan_id=loan.id, investor=self.investor, amount=Decimal('200000.00'), idempotency_key='mr-1')
+        schedule1 = loan.repayment_schedules.get(installment_number=1)
+        schedule1.due_date = date.today()
+        schedule1.save(update_fields=['due_date'])
         repay(loan_id=loan.id, borrower=self.borrower, idempotency_key='mr-repay-1')
         self.client.force_authenticate(user=self.investor)
 
