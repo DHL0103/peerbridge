@@ -43,7 +43,8 @@ def generate_schedule(loan):
     if RepaymentSchedule.objects.filter(loan=loan).exists():
         return
 
-    principal_per = (loan.target_amount / loan.term_months).quantize(Decimal('0.01'), rounding=ROUND_DOWN)
+    # 원화는 소숫점 단위가 없다 — 원 단위(Decimal('1'))로 반올림한다.
+    principal_per = (loan.target_amount / loan.term_months).quantize(Decimal('1'), rounding=ROUND_DOWN)
     outstanding = loan.target_amount
     today = date.today()
     schedules = []
@@ -53,7 +54,7 @@ def generate_schedule(loan):
         else:
             principal = principal_per
         interest = (outstanding * loan.interest_rate / Decimal('100') / Decimal('12')).quantize(
-            Decimal('0.01'), rounding=ROUND_HALF_UP,
+            Decimal('1'), rounding=ROUND_HALF_UP,
         )
         schedules.append(RepaymentSchedule(
             loan=loan, installment_number=installment_number, due_date=_add_months(today, installment_number),
@@ -162,7 +163,12 @@ def repay(*, loan_id, borrower, idempotency_key):
                 balance_after=locked_borrower.balance,
             )
 
-            _distribute(repayment=repayment, schedule=schedule, loan=loan)
+            # 정산일(schedule.due_date)이 되기 전에 미리 낸 거라면 분배는 보류한다 — 투자자는
+            # 원래 예정된 날짜에 받는 게 맞고, distribute_due_repayments() 배치가 그날 처리한다.
+            if schedule.due_date <= date.today():
+                _distribute(repayment=repayment, schedule=schedule, loan=loan)
+                repayment.distributed_at = timezone.now()
+                repayment.save(update_fields=['distributed_at'])
 
             if late_fee > 0:
                 platform = User.objects.select_for_update().get(username=PLATFORM_USERNAME)
@@ -180,3 +186,28 @@ def repay(*, loan_id, borrower, idempotency_key):
             return repayment, True
     except IntegrityError:
         return Repayment.objects.get(borrower=borrower, idempotency_key=idempotency_key), False
+
+
+def distribute_due_repayments():
+    """정산일 전에 미리 상환해서 분배가 보류된 건 중, 정산일(due_date)이 된 것을 분배한다.
+
+    반환: 이번에 분배 처리된 Repayment 목록.
+    """
+    today = date.today()
+    pending_ids = Repayment.objects.filter(
+        distributed_at__isnull=True, schedule__due_date__lte=today,
+    ).values_list('id', flat=True)
+
+    settled = []
+    for repayment_id in pending_ids:
+        with transaction.atomic():
+            repayment = Repayment.objects.select_for_update().select_related('schedule', 'loan').get(pk=repayment_id)
+            if repayment.distributed_at is not None:
+                continue
+
+            _distribute(repayment=repayment, schedule=repayment.schedule, loan=repayment.loan)
+            repayment.distributed_at = timezone.now()
+            repayment.save(update_fields=['distributed_at'])
+            settled.append(repayment)
+
+    return settled
