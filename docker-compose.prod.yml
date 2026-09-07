@@ -20,8 +20,8 @@
 #   3. 프론트 두 개는 각자 VITE_API_BASE_URL="" (빈 값)으로 빌드해서 /api 요청이
 #      같은 origin의 상대경로로 나가게 함 — nginx가 같은 서버 블록에서 /api를
 #      백엔드로 프록시하므로 별도 CORS 설정이 필요 없어짐.
-#   4. CI/CD로 자동배포하려면 EC2에 AWS CLI가 설치돼있고 ECR을 pull할 수 있는 자격
-#      증명이 구성돼 있어야 함(IAM 인스턴스 프로필 권장, 또는 aws configure).
+#   4. CI/CD로 자동배포하려면 EC2에 amazon-ecr-credential-helper 설치 + IAM Role
+#      (AmazonEC2ContainerRegistryFullAccess) 부착이 필요함 — 자세한 건 DEPLOY.md 참고.
 
 services:
   db:

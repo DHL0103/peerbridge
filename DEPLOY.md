@@ -59,9 +59,24 @@ docker compose --env-file .env.production -f docker-compose.prod.yml up -d --bui
 
 ### 최초 1회, AWS 콘솔/CLI에서 준비할 것
 - ECR 리포지토리 생성: `aws ecr create-repository --repository-name peerbridge --region ap-northeast-2`
-- 이미지를 push할 수 있는 IAM 사용자(액세스키/시크릿 발급)
-- EC2 인스턴스가 ECR을 pull할 수 있어야 함 — 인스턴스에 IAM 역할을 붙이거나,
-  EC2에서 `aws configure`로 자격증명을 한 번 등록
+- GitHub Actions가 이미지를 push할 수 있는 IAM 사용자(액세스키/시크릿 발급)
+- **EC2가 ECR을 pull할 수 있게 설정** (EC2 인스턴스에서 1회):
+  1. EC2 인스턴스에 IAM Role을 붙이고, 그 Role에 `AmazonEC2ContainerRegistryFullAccess` 정책 추가
+  2. `amazon-ecr-credential-helper` 설치
+     ```bash
+     sudo apt update && sudo apt install amazon-ecr-credential-helper   # Ubuntu 기준
+     ```
+  3. `~/.docker/config.json` 작성
+     ```json
+     {
+       "credsStore": "ecr-login"
+     }
+     ```
+  이렇게 해두면 `docker pull`이 알아서 인스턴스 Role로 인증한다 — 배포 스크립트에 별도
+  로그인 스텝이 필요 없다. **주의**: 이 설정은 명령을 실행하는 유저의 `$HOME` 기준이라,
+  `sudo docker pull ...`처럼 sudo를 붙이면 root의 `$HOME`(`/root/.docker/config.json`)을
+  보게 되어 `no basic auth credentials` 에러가 난다 — SSH 배포 유저를 `docker` 그룹에
+  넣어서 sudo 없이 docker 명령이 되게 할 것.
 
 ### GitHub 저장소 Settings → Secrets and variables → Actions에 등록할 값
 | Secret | 값 |
