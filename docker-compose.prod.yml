@@ -1,14 +1,20 @@
 # 프로덕션용 compose.
 #
-# 모든 명령에 --env-file .env.production을 붙여야 ${DB_PASSWORD}, ${ECR_IMAGE} 같은
-# 치환이 제대로 된다 (docker compose는 기본으로 정확히 ".env" 파일만 자동 인식함).
+# 두 종류의 설정값이 서로 다른 경로로 들어온다:
+#   - Django 앱 자체의 설정(SECRET_KEY, DB 접속정보 등)은 이미지 안에 이미 구워져 있다
+#     (GitHub Actions가 빌드 전에 GitHub Secret으로 .env.docker를 만들어 이미지에 포함시킴).
+#     그래서 web 서비스에는 env_file이 없다.
+#   - docker-compose.prod.yml 파일 자체가 쓰는 ${DB_PASSWORD}, ${ECR_IMAGE} 같은 값은
+#     여전히 이 서버의 .env.production에서 온다(--env-file .env.production 필요,
+#     docker compose는 기본으로 정확히 ".env" 파일만 자동 인식하기 때문).
+#     db 서비스 자체를 띄우는 데 필요한 값이라 이미지 안에 넣는 것과는 별개다.
 #
 # web 이미지는 두 가지 방식으로 얻을 수 있다:
 #   - CI/CD(.github/workflows/deploy.yml)가 자동으로: main에 푸시되면 ECR에 이미지를
 #     빌드/푸시하고, EC2에 SSH로 접속해 `docker compose pull web && up -d web`을 실행한다.
-#     이때 image: 필드(.env.production의 ECR_IMAGE)가 실제로 어떤 이미지를 받아올지 결정한다.
 #   - 수동으로 로컬 빌드: `docker compose --env-file .env.production -f docker-compose.prod.yml up -d --build`
-#     (CI 없이 처음 띄워볼 때, 또는 ECR 없이 그냥 확인만 할 때)
+#     (CI 없이 처음 띄워볼 때, 또는 ECR 없이 그냥 확인만 할 때 — 이 경우 .env.docker가
+#     없으므로 Django 쪽 설정은 비어있는 채로 뜬다는 점 주의)
 #
 # 사전 준비:
 #   1. 이 저장소(peerbridge)와 프론트 두 개(peerbridge-web, peerbridge-admin)를
@@ -16,7 +22,8 @@
 #        ~/apps/peerbridge/          (이 저장소)
 #        ~/apps/peerbridge-web/app/  (사용자 프론트, npm run build 완료 상태)
 #        ~/apps/peerbridge-admin/    (관리자 프론트, npm run build 완료 상태)
-#   2. .env.production 파일을 이 저장소 루트에 작성 (.env.production.example 참고)
+#   2. .env.production 파일을 이 저장소 루트에 작성 (.env.production.example 참고) —
+#      docker-compose.prod.yml 자체의 ${...} 치환용이며 Django에는 전달되지 않는다.
 #   3. 프론트 두 개는 각자 VITE_API_BASE_URL="" (빈 값)으로 빌드해서 /api 요청이
 #      같은 origin의 상대경로로 나가게 함 — nginx가 같은 서버 블록에서 /api를
 #      백엔드로 프록시하므로 별도 CORS 설정이 필요 없어짐.
@@ -46,8 +53,6 @@ services:
     build: .
     image: ${ECR_IMAGE:-peerbridge-web:local}
     restart: unless-stopped
-    env_file:
-      - .env.production
     environment:
       DB_HOST: db
       DB_PORT: 3306
