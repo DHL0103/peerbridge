@@ -11,6 +11,8 @@ env:
 jobs:
   build-and-push:
     runs-on: ubuntu-latest
+    outputs:
+      registry: ${{ steps.ecr-login.outputs.registry }}
     steps:
       - uses: actions/checkout@v4
 
@@ -47,9 +49,15 @@ jobs:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
+          envs: ECR_REGISTRY
           script: |
-            cd ~/apps/peerbridge
-            git pull origin main
-            docker compose --env-file .env.production -f docker-compose.prod.yml pull web
-            docker compose --env-file .env.production -f docker-compose.prod.yml up -d web
+            docker stop peerbridge-web || true
+            docker rm peerbridge-web || true
+            docker pull $ECR_REGISTRY/peerbridge:latest
+            docker run -d --name peerbridge-web -p 8000:8000 \
+              --restart unless-stopped \
+              $ECR_REGISTRY/peerbridge:latest \
+              sh -c "python manage.py migrate && python manage.py collectstatic --noinput && gunicorn peerbridge.wsgi:application --bind 0.0.0.0:8000 --workers 3"
             docker image prune -f
+        env:
+          ECR_REGISTRY: ${{ needs.build-and-push.outputs.registry }}

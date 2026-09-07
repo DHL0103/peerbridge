@@ -1,16 +1,17 @@
 services:
   db:
-    image: mysql:8.0
+    image: postgres:16-alpine
     restart: unless-stopped
     environment:
-      MYSQL_ROOT_PASSWORD: ${DB_PASSWORD}
-      MYSQL_DATABASE: ${DB_NAME}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
     ports:
-      - "${DB_PORT}:3306"
+      - "${DB_PORT}:5432"
     volumes:
-      - mysql_data:/var/lib/mysql
+      - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-p${DB_PASSWORD}"]
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER}"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -22,7 +23,7 @@ services:
       - .env
     environment:
       DB_HOST: db
-      DB_PORT: 3306
+      DB_PORT: 5432
     ports:
       - "8000:8000"
     volumes:
@@ -44,4 +45,4 @@ services:
       - web
 
 volumes:
-  mysql_data:
+  postgres_data:
