@@ -40,6 +40,9 @@ class Repayment(models.Model):
     borrower = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE, related_name='repayments')
     amount = models.DecimalField(max_digits=14, decimal_places=2)
     idempotency_key = models.CharField(max_length=100)
+    # 납부(이 레코드 생성)와 투자자 분배는 시점이 다르다 — 정산일(schedule.due_date) 전에 미리 냈다면
+    # 분배는 정산일까지 보류되고, 그동안 이 값은 null이다. null이면 아직 미분배.
+    distributed_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
