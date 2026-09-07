@@ -16,7 +16,9 @@ RUN pip install --no-cache-dir \
     drf-spectacular==0.27.2 \
     django-cors-headers==4.9.0 \
     mysqlclient==2.2.4 \
-    python-dotenv==1.2.1
+    python-dotenv==1.2.1 \
+    gunicorn==23.0.0 \
+    whitenoise==6.8.2
 
 COPY . .
 

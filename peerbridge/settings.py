@@ -24,12 +24,13 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # See https://docs.djangoproject.com/en/4.2/howto/deployment/checklist/
 
 # SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'django-insecure-*f4y+%h98e21=r(xsa!u48pra_u7q3!!q+c8hd1qqjoht3zd0o'
+# 개발 기본값은 폴백일 뿐 — 프로덕션에서는 반드시 SECRET_KEY 환경변수로 교체할 것.
+SECRET_KEY = os.getenv('SECRET_KEY', 'django-insecure-*f4y+%h98e21=r(xsa!u48pra_u7q3!!q+c8hd1qqjoht3zd0o')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = os.getenv('DEBUG', 'True') == 'True'
 
-ALLOWED_HOSTS = []
+ALLOWED_HOSTS = [h for h in os.getenv('ALLOWED_HOSTS', '').split(',') if h]
 
 
 # Application definition
@@ -59,7 +60,7 @@ INSTALLED_APPS = [
 
 AUTH_USER_MODEL = 'accounts.User'
 
-# ponytail: 로컬 React(Vite) 개발 서버용. 배포 도메인 확정되면 여기 교체.
+# 로컬 React(Vite) 개발 서버용 기본 목록 + 프로덕션 도메인은 CORS_EXTRA_ORIGINS 환경변수로 추가.
 CORS_ALLOWED_ORIGINS = [
     'http://localhost:5173',
     'http://127.0.0.1:5173',
@@ -67,10 +68,11 @@ CORS_ALLOWED_ORIGINS = [
     'http://127.0.0.1:5174',
     'http://peerbridge.local',
     'http://admin.peerbridge.local',
-]
+] + [o for o in os.getenv('CORS_EXTRA_ORIGINS', '').split(',') if o]
 
 MIDDLEWARE = [
     'django.middleware.security.SecurityMiddleware',
+    'whitenoise.middleware.WhiteNoiseMiddleware',
     'corsheaders.middleware.CorsMiddleware',
     'django.contrib.sessions.middleware.SessionMiddleware',
     'django.middleware.common.CommonMiddleware',
@@ -153,8 +155,16 @@ USE_TZ = True
 
 # Static files (CSS, JavaScript, Images)
 # https://docs.djangoproject.com/en/4.2/howto/static-files/
+# whitenoise가 gunicorn 프로세스 안에서 직접 서빙(Django Admin 등에 필요) — nginx에
+# static 경로를 별도로 뚫을 필요 없음.
 
 STATIC_URL = 'static/'
+STATIC_ROOT = BASE_DIR / 'staticfiles'
+STORAGES = {
+    'staticfiles': {
+        'BACKEND': 'whitenoise.storage.CompressedManifestStaticFilesStorage',
+    },
+}
 
 # Default primary key field type
 # https://docs.djangoproject.com/en/4.2/ref/settings/#default-auto-field
