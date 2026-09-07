@@ -39,7 +39,7 @@ python3 -c "from django.core.management.utils import get_random_secret_key; prin
 ## 3. 기동
 
 ```bash
-docker compose -f docker-compose.prod.yml up -d --build
+docker compose --env-file .env.production -f docker-compose.prod.yml up -d --build
 ```
 
 `web` 컨테이너 기동 시 마이그레이션과 `collectstatic`이 자동 실행된다.
@@ -49,6 +49,34 @@ docker compose -f docker-compose.prod.yml up -d --build
 - `http://<VPS_IP>/` — 사용자용 사이트
 - `http://<VPS_IP>:8081/` — 관리자 콘솔
 - `http://<VPS_IP>/api/loans/` — API 응답 확인
+
+## CI/CD (자동배포)
+
+`.github/workflows/deploy.yml` — `main`에 머지/푸시되면 자동으로:
+1. Docker 이미지를 빌드해 ECR에 푸시 (`:latest` + 커밋 sha 태그)
+2. EC2에 SSH로 접속해 `docker compose pull web && up -d web` 실행 (마이그레이션은
+   `web` 컨테이너 기동 커맨드에 이미 포함돼있어 자동 적용됨)
+
+### 최초 1회, AWS 콘솔/CLI에서 준비할 것
+- ECR 리포지토리 생성: `aws ecr create-repository --repository-name peerbridge --region ap-northeast-2`
+- 이미지를 push할 수 있는 IAM 사용자(액세스키/시크릿 발급)
+- EC2 인스턴스가 ECR을 pull할 수 있어야 함 — 인스턴스에 IAM 역할을 붙이거나,
+  EC2에서 `aws configure`로 자격증명을 한 번 등록
+
+### GitHub 저장소 Settings → Secrets and variables → Actions에 등록할 값
+| Secret | 값 |
+|---|---|
+| `AWS_ACCESS_KEY_ID` | ECR push용 IAM 액세스 키 |
+| `AWS_SECRET_ACCESS_KEY` | 위 키의 시크릿 |
+| `EC2_HOST` | VPS 공인 IP 또는 도메인 |
+| `EC2_USER` | SSH 접속 계정 (예: ubuntu) |
+| `EC2_SSH_KEY` | EC2 접속용 SSH 프라이빗 키 (PEM 파일 내용 그대로) |
+
+### `.env.production`에 추가로 채울 값
+```
+ECR_IMAGE=<AWS계정ID>.dkr.ecr.ap-northeast-2.amazonaws.com/peerbridge:latest
+```
+`docker-compose.prod.yml`의 `web` 서비스가 이 값을 보고 어떤 이미지를 pull할지 정한다.
 
 ## 5. DB 접근 (운영 중 조회/디버깅)
 

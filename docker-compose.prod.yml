@@ -1,4 +1,14 @@
-# 프로덕션용 compose. 실행: docker compose -f docker-compose.prod.yml up -d --build
+# 프로덕션용 compose.
+#
+# 모든 명령에 --env-file .env.production을 붙여야 ${DB_PASSWORD}, ${ECR_IMAGE} 같은
+# 치환이 제대로 된다 (docker compose는 기본으로 정확히 ".env" 파일만 자동 인식함).
+#
+# web 이미지는 두 가지 방식으로 얻을 수 있다:
+#   - CI/CD(.github/workflows/deploy.yml)가 자동으로: main에 푸시되면 ECR에 이미지를
+#     빌드/푸시하고, EC2에 SSH로 접속해 `docker compose pull web && up -d web`을 실행한다.
+#     이때 image: 필드(.env.production의 ECR_IMAGE)가 실제로 어떤 이미지를 받아올지 결정한다.
+#   - 수동으로 로컬 빌드: `docker compose --env-file .env.production -f docker-compose.prod.yml up -d --build`
+#     (CI 없이 처음 띄워볼 때, 또는 ECR 없이 그냥 확인만 할 때)
 #
 # 사전 준비:
 #   1. 이 저장소(peerbridge)와 프론트 두 개(peerbridge-web, peerbridge-admin)를
@@ -10,6 +20,8 @@
 #   3. 프론트 두 개는 각자 VITE_API_BASE_URL="" (빈 값)으로 빌드해서 /api 요청이
 #      같은 origin의 상대경로로 나가게 함 — nginx가 같은 서버 블록에서 /api를
 #      백엔드로 프록시하므로 별도 CORS 설정이 필요 없어짐.
+#   4. CI/CD로 자동배포하려면 EC2에 AWS CLI가 설치돼있고 ECR을 pull할 수 있는 자격
+#      증명이 구성돼 있어야 함(IAM 인스턴스 프로필 권장, 또는 aws configure).
 
 services:
   db:
@@ -32,6 +44,7 @@ services:
 
   web:
     build: .
+    image: ${ECR_IMAGE:-peerbridge-web:local}
     restart: unless-stopped
     env_file:
       - .env.production
