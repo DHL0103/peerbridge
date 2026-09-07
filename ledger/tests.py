@@ -3,7 +3,7 @@ from decimal import Decimal
 from rest_framework import status
 from rest_framework.test import APITestCase
 
-from accounts.models import User
+from accounts.models import BankAccount, User
 from ledger.models import Ledger
 
 CHARGE_URL = '/api/ledger/charge/'
@@ -18,6 +18,7 @@ class ChargeAPITests(APITestCase):
         self.user = User.objects.create_user(username='chargeuser', email='chargeuser@example.com', password='S7rongPass!2024')
         self.user.balance = Decimal('10000.00')
         self.user.save()
+        BankAccount.objects.create(user=self.user, bank_name='국민', account_number='111', account_holder='홍길동', is_primary=True)
 
     # REQ-005
     def test_charge_with_positive_amount_increases_balance_and_creates_ledger(self):
@@ -66,6 +67,28 @@ class ChargeAPITests(APITestCase):
 
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
 
+    def test_charge_without_bank_account_returns_400_and_does_not_change_balance(self):
+        no_account_user = User.objects.create_user(username='noaccount1', email='noaccount1@example.com', password='S7rongPass!2024')
+        no_account_user.balance = Decimal('10000.00')
+        no_account_user.save()
+        self.client.force_authenticate(user=no_account_user)
+
+        response = self.client.post(CHARGE_URL, {'amount': '5000.00'}, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        no_account_user.refresh_from_db()
+        self.assertEqual(no_account_user.balance, Decimal('10000.00'))
+        self.assertEqual(Ledger.objects.filter(user=no_account_user).count(), 0)
+
+    def test_charge_with_non_primary_bank_account_returns_400(self):
+        no_primary_user = User.objects.create_user(username='noprimary1', email='noprimary1@example.com', password='S7rongPass!2024')
+        BankAccount.objects.create(user=no_primary_user, bank_name='국민', account_number='222', account_holder='김철수', is_primary=False)
+        self.client.force_authenticate(user=no_primary_user)
+
+        response = self.client.post(CHARGE_URL, {'amount': '5000.00'}, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+
 
 class WithdrawAPITests(APITestCase):
     """POST /api/ledger/withdraw/ 에 대한 예치금 출금 API 테스트 (REQ-007, REQ-008, REQ-010)."""
@@ -74,6 +97,7 @@ class WithdrawAPITests(APITestCase):
         self.user = User.objects.create_user(username='withdrawuser', email='withdrawuser@example.com', password='S7rongPass!2024')
         self.user.balance = Decimal('10000.00')
         self.user.save()
+        BankAccount.objects.create(user=self.user, bank_name='국민', account_number='333', account_holder='홍길동', is_primary=True)
 
     # REQ-007
     def test_withdraw_with_sufficient_balance_decreases_balance_and_creates_ledger(self):
@@ -113,6 +137,19 @@ class WithdrawAPITests(APITestCase):
         response = self.client.post(WITHDRAW_URL, {'amount': '1000.00'}, format='json')
 
         self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_withdraw_without_bank_account_returns_400_and_does_not_change_balance(self):
+        no_account_user = User.objects.create_user(username='noaccount2', email='noaccount2@example.com', password='S7rongPass!2024')
+        no_account_user.balance = Decimal('10000.00')
+        no_account_user.save()
+        self.client.force_authenticate(user=no_account_user)
+
+        response = self.client.post(WITHDRAW_URL, {'amount': '5000.00'}, format='json')
+
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        no_account_user.refresh_from_db()
+        self.assertEqual(no_account_user.balance, Decimal('10000.00'))
+        self.assertEqual(Ledger.objects.filter(user=no_account_user).count(), 0)
 
 
 class LedgerHistoryAPITests(APITestCase):
