@@ -27,8 +27,8 @@ jobs:
         id: ecr-login
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: .env.docker 파일 만들기
-        run: echo "${{ secrets.ENV_DOCKER }}" > .env.docker
+      - name: .env.prod 파일 만들기
+        run: echo "${{ secrets.ENV_PROD }}" > .env.prod
 
       - name: Build and push image
         env:

@@ -19,7 +19,7 @@ lib64/
 
 # Virtual environments
 .env
-.env.docker
+.env.prod
 .venv
 env/
 venv/
