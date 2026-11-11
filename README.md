@@ -128,26 +128,7 @@ USER ──< NOTIFICATION
 
 ## API
 
-| Method | Endpoint | 설명 | 인증 |
-|--------|----------|------|------|
-| POST | /api/auth/register/ | 회원가입 | - |
-| POST | /api/auth/login/ | 로그인 (JWT) | - |
-| GET/POST | /api/loans/applications/ | 내 대출 신청 목록 조회 / 등록 | 로그인 필요 |
-| GET | /api/loans/applications/pending/ | 관리자용 심사 대기 목록 | 관리자만 |
-| POST | /api/loans/applications/{id}/approve/ | 승인 (금리 확정, Loan 생성) | 관리자만 |
-| POST | /api/loans/applications/{id}/reject/ | 거절 | 관리자만 |
-| GET | /api/loans/ | 대출 상품 목록 (`?status=FUNDRAISING` 등 필터) | 비로그인 허용 |
-| GET | /api/loans/{id}/ | 대출 상품 상세 | 비로그인 허용 |
-| POST | /api/investments/ | 투자 실행 | 로그인 필요 |
-| GET | /api/investments/mine/ | 내 투자 내역 | 로그인 필요 |
-| GET | /api/investments/monthly-returns/ | 월별 수익 추이 | 로그인 필요 |
-| GET | /api/loans/mine/next-repayment/ | 다음 상환 예정 회차 | 로그인 필요 |
-| POST | /api/loans/{id}/repay/ | 상환 납부 | 로그인 필요 |
-| GET | /api/ledger/ | 내 거래 내역 | 로그인 필요 |
-| POST | /api/ledger/charge/ | 예치금 충전 | 로그인 필요 |
-| POST | /api/ledger/withdraw/ | 예치금 출금 | 로그인 필요 |
-| GET | /api/loans/admin/stats/ | 관리자용 플랫폼 통계 | 관리자만 |
-| GET | /api/schema/, /api/docs/ | API 스키마 / Swagger UI | - |
+drf-spectacular가 전체 엔드포인트를 자동으로 문서화한다 — `/api/docs/` (Swagger UI), `/api/redoc/`.
 
 ## 로컬 개발 환경
 
